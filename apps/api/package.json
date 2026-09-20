@@ -1,0 +1,27 @@
+{
+  "name": "@opsflow/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "services:check": "tsx src/services-check.ts"
+  },
+  "dependencies": {
+    "@opsflow/config": "0.1.0",
+    "@opsflow/shared": "0.1.0",
+    "@fastify/cookie": "11.1.2",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.12.5",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.10"
+  }
+}

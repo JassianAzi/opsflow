@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: opsflow_test
+          POSTGRES_PASSWORD: test_only
+          POSTGRES_DB: opsflow_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U opsflow_test -d opsflow_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://opsflow_test:test_only@127.0.0.1:5433/opsflow_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

@@ -6,6 +6,14 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 2 — Workflow CRUD
+
+- added Drizzle workflows and workflow steps schema with a versioned migration
+- added shared trigger, condition, action, and retry validation schemas
+- added member-scoped workflow CRUD, activation validation, linear ordering, and version tracking
+- added a workflow list and ordered editor to the React organization workspace
+- added PostgreSQL API integration coverage for workflow authorization, CRUD, validation, activation, and ordering
+
 ### Phase 1 — Authentication and Organizations
 
 - made PostgreSQL and Redis host ports configurable, defaulting PostgreSQL to 5433

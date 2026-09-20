@@ -3,9 +3,10 @@
 This document defines the initial logical database model.
 
 Phase 1 defines the four authentication and organization tables in
-`apps/api/src/db/schema.ts`. The first versioned SQL migration is
-`apps/api/drizzle/0000_soft_next_avengers.sql`. The later tables in this
-document remain design targets and have not been created.
+`apps/api/src/db/schema.ts` with migration
+`apps/api/drizzle/0000_soft_next_avengers.sql`. Phase 2 adds workflows and
+workflow steps in `apps/api/drizzle/0001_previous_amazoness.sql`. Execution,
+tasks, audit, and webhook tables below remain design targets.
 
 The exact ORM syntax may change, but the domain model should remain consistent unless the architecture is intentionally revised and documented.
 
@@ -96,6 +97,15 @@ Statuses:
 - active
 - inactive
 
+Constraints and behavior:
+- UUID primary key, foreign keys to organization (`ON DELETE CASCADE`) and creator user
+- PostgreSQL enums for status and trigger type (`manual`, `webhook`, `schedule`)
+- `trigger_config` is JSONB and defaults to `{}`
+- `version` starts at 1 and increments once per material definition change;
+  status changes do not increment it
+- `created_at` and `updated_at` are `timestamptz`; the API updates the latter
+- index on `(organization_id, updated_at)` supports scoped listing
+
 ### workflow_steps
 
 Fields:
@@ -113,6 +123,16 @@ Fields:
 Step types:
 - condition
 - action
+
+Constraints and behavior:
+- UUID primary key; workflow foreign key cascades on delete
+- action type enum: `log`, `internal_task`, `mock_email`, `http_request`, `ai`;
+  null for condition steps
+- JSONB `config` and `retry_config` (`{}` default); no execution occurs yet
+- unique `(workflow_id, step_order)` index; the API assigns consecutive
+  zero-based positions from an ordered array and requires conditions before actions
+- the Phase 2 PATCH API replaces step rows in one transaction when the step set
+  changes; step IDs can change after an edit
 
 ### workflow_executions
 
@@ -241,8 +261,8 @@ Rules:
 - migration files are committed
 - destructive migrations must be explicitly documented
 
-Run `npm run db:migrate` against the intended `DATABASE_URL`. Phase 1 generated
-the migration with `npm run db:generate` and applied it to a dedicated
+Run `npm run db:migrate` against the intended `DATABASE_URL`. Phase 1 and
+Phase 2 generated migrations with `npm run db:generate` and applied them to a dedicated
 `opsflow_test` database. No seed data exists yet. API integration tests apply
 committed migrations to a dedicated database named `opsflow_test` and clear
 only their own fixture rows between tests.

@@ -17,9 +17,9 @@ response, for example:
 }
 ```
 
-It does not check database or Redis readiness. The authentication and
-organization endpoints below are implemented in Phase 1; later sections remain
-planned contracts.
+It does not check database or Redis readiness. Authentication, organizations,
+and workflow configuration endpoints are implemented. Execution, webhook
+intake, tasks, and audit endpoints remain planned contracts.
 
 The API may evolve during implementation. Any breaking changes must be reflected in this document.
 
@@ -104,43 +104,109 @@ The last owner cannot be demoted. Non-members receive 404; members without the
 owner role receive `403 OWNER_REQUIRED`; last-owner demotion receives
 `409 LAST_OWNER`.
 
-## 3. Workflows
+## 3. Workflows (implemented in Phase 2)
 
-The endpoints in this section and below are planned and have not been implemented.
+Every route requires an authenticated member of `:organizationId`. Owners and
+members have the same workflow permissions in Phase 2. A non-member receives
+`404 ORGANIZATION_NOT_FOUND`; a workflow outside the given organization receives
+`404 WORKFLOW_NOT_FOUND`.
 
 ### GET `/api/organizations/:organizationId/workflows`
 
-Lists workflows.
+Returns `{ "workflows": [...] }` ordered by latest update. Each summary has
+`id`, `organizationId`, `name`, `description`, `status`, `triggerType`,
+`triggerConfig`, `version`, `createdBy`, `createdAt`, and `updatedAt`.
 
 ### POST `/api/organizations/:organizationId/workflows`
 
-Creates a workflow.
+Accepts `name` (1–120 characters), optional `description`, `triggerType`, and
+optional `triggerConfig`. Returns HTTP 201 with `{ "workflow": ... }` including
+an empty `steps` array. The status is always `draft` and version is `1`.
+
+```json
+{"name":"Follow up","description":"New lead review","triggerType":"manual","triggerConfig":{}}
+```
 
 ### GET `/api/organizations/:organizationId/workflows/:workflowId`
 
-Returns workflow details.
+Returns `{ "workflow": ... }` including ordered `steps`. Steps have `id`,
+`workflowId`, zero-based `stepOrder`, `stepType`, nullable `actionType`, `name`,
+`config`, `retryConfig`, `createdAt`, and `updatedAt`.
 
 ### PATCH `/api/organizations/:organizationId/workflows/:workflowId`
 
-Updates workflow metadata or configuration.
+Accepts any nonempty subset of `name`, `description`, `triggerType`,
+`triggerConfig`, and `steps`. The `steps` field is the complete ordered step
+array, not a partial patch. Its position defines `stepOrder` starting at zero.
+Conditions must precede actions. Each element contains `stepType`,
+`actionType` (`null` for conditions), `name`, `config`, and optional
+`retryConfig`. An edit replaces all step rows in one transaction; new IDs are
+assigned if the step set changes. Omit `steps` to leave them unchanged. A
+material configuration change increments `version` once; an equivalent update
+does not. Active workflows must remain fully valid after an edit.
+
+```json
+{
+  "steps": [
+    {"stepType":"condition","actionType":null,"name":"Is active","config":{"field":"customer.status","operator":"equals","value":"active"}},
+    {"stepType":"action","actionType":"log","name":"Log","config":{"message":"Active customer"}}
+  ]
+}
+```
 
 ### DELETE `/api/organizations/:organizationId/workflows/:workflowId`
 
-Deletes or archives a workflow.
+Hard deletes a workflow and its steps. Returns HTTP 204. Execution history does
+not exist yet. A missing workflow returns 404.
 
 ### POST `/api/organizations/:organizationId/workflows/:workflowId/activate`
 
-Activates a workflow.
+Validates the persisted workflow and sets status to `active`. Returns
+`{ "workflow": ... }`. Requires at least one action, conditions before
+actions, valid step configs, and a complete trigger config. An invalid
+definition returns `400 WORKFLOW_INVALID` with `details` containing field paths.
+Activation is idempotent and does not enqueue or execute anything. Status
+changes update `updatedAt` but do not increment `version`.
 
 ### POST `/api/organizations/:organizationId/workflows/:workflowId/deactivate`
 
-Deactivates a workflow.
+Sets status to `inactive` and returns `{ "workflow": ... }`. Idempotent; does
+not increment `version`.
+
+### Trigger and step configuration
+
+- `manual` and `webhook` use `{}` for `triggerConfig`; webhook intake is not
+  implemented.
+- `schedule` uses `{ "cron": "0 9 * * 1-5", "timezone": "UTC" }`. Cron is a
+  five-field numeric expression: minute, hour, day of month, month, weekday.
+  Lists, ranges, `*`, and strides are accepted; named weekdays and macros are
+  not. `cron` may be omitted on a draft but is required for activation. The
+  optional timezone is an IANA name; future scheduling should default to UTC.
+- Conditions use `{ "field": "customer.status", "operator": "equals", "value": "active" }`.
+  Operators: `equals`, `not_equals`, `contains`, `greater_than`, `less_than`,
+  `exists`, `does_not_exist`. Existence operators omit `value`; numeric
+  comparisons require a number.
+- Actions: `log` uses `{ "message": "..." }`; `internal_task` uses
+  `{ "title": "...", "description": "..." }`; `mock_email` uses
+  `{ "to": "demo@example.com", "subject": "...", "body": "..." }`;
+  `http_request` uses `{ "method": "GET", "url": "https://example.com", "headers": {}, "body": "..." }`;
+  `ai` uses `{ "operation": "classify", "prompt": "...", "outputSchema": {} }`.
+  `extract` is also an AI operation. The API stores these configurations only.
+  HTTP credential headers such as `Authorization`, `Cookie`, and `X-API-Key`
+  are rejected; do not put secrets elsewhere in workflow JSON.
+- Action `retryConfig` may contain `maxAttempts` (1–10) and `delayMs`
+  (0–3,600,000). It is stored only. Conditions use `{}` and do not retry.
+
+The web editor currently exposes required action fields. Optional HTTP
+headers, AI output schema, and retry settings are API-only for now.
+
+## 4. Planned API (not implemented)
 
 ### POST `/api/organizations/:organizationId/workflows/:workflowId/test`
 
 Creates a test execution.
 
-## 4. Executions
+## 5. Executions
 
 ### GET `/api/organizations/:organizationId/executions`
 
@@ -156,7 +222,7 @@ Supported filters may include:
 
 Returns execution details and steps.
 
-## 5. Webhooks
+## 6. Webhooks
 
 ### POST `/api/hooks/:publicId`
 
@@ -172,7 +238,7 @@ Requirements:
 
 Do not perform the workflow synchronously inside this route.
 
-## 6. Internal Tasks
+## 7. Internal Tasks
 
 ### GET `/api/organizations/:organizationId/tasks`
 
@@ -182,13 +248,13 @@ Lists generated tasks.
 
 Updates task status.
 
-## 7. Audit Logs
+## 8. Audit Logs
 
 ### GET `/api/organizations/:organizationId/audit-logs`
 
 Returns audit entries.
 
-## 8. API Error Format
+## 9. API Error Format
 
 Preferred response:
 
@@ -207,7 +273,7 @@ Phase 1 uses `400 VALIDATION_ERROR` for malformed input, `401 UNAUTHORIZED`
 for missing or expired sessions, and `500 INTERNAL_ERROR` for unexpected
 server errors. Internal database details are never returned to clients.
 
-## 9. HTTP Rules
+## 10. HTTP Rules
 
 - use correct HTTP status codes
 - avoid leaking internal stack traces

@@ -6,7 +6,157 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State
+## Current State — Phase 2
+
+### Milestone and Status
+
+Phase 2 — Workflow CRUD: **Complete for the requested scope**. Authenticated
+organization members can create, configure, view, list, activate, deactivate,
+and delete persisted workflows. Nothing executes yet. GitHub CI and Docker
+Compose remain unverified in this environment.
+
+### Verified Repository State
+
+- Inspected all required documents, source structure, manifests, schema,
+  migrations, tests, frontend state, `git status`, and recent history before
+  editing. The previous handoff was stale on Git history: `main` has commit
+  `0c130c0 feat: complete phase 1 authentication and organizations`. There is
+  no remote. Phase 1 files were present, and the initial working tree was clean.
+- All Phase 2 changes listed below remain **uncommitted** on `main`. The
+  ignored `.env`, `.local/`, dependencies, and build output are not tracked.
+  The isolated PostgreSQL 18 cluster is under `.local/pgdata`, ran on port
+  55433 only for testing, and was stopped after validation. The unrelated
+  local PostgreSQL instance on 5432 was untouched.
+
+### Implementation and Workflow Model
+
+- Added `workflows` and `workflow_steps` with UUID keys, foreign keys, enum
+  columns, JSONB config columns, timestamps, an organization listing index,
+  and a unique `(workflow_id, step_order)` index. Conditions precede actions.
+  The array order in PATCH becomes consecutive zero-based `step_order` values.
+- Shared Zod schemas define statuses, triggers, condition operators, action
+  types, and typed configs. Reusable validation checks the complete definition
+  independently of HTTP. Drafts may have zero steps and may omit schedule cron;
+  activation requires a complete trigger and at least one valid action. Cron
+  accepts five numeric fields, lists, ranges, wildcards, and strides; an
+  optional IANA timezone is stored. No scheduler is implemented.
+- The API uses the single workflow PATCH endpoint for metadata, trigger, and
+  complete ordered step replacement. It validates and writes the replacement
+  in one transaction under a workflow row lock. This choice keeps ordering
+  atomic and avoids a large step subresource API. A changed definition
+  increments `version` once, beginning at 1; no-op updates and status changes
+  do not increment it. Edited step sets receive new step IDs. Phase 3 must
+  plan a versioned definition snapshot or equivalent before historic execution
+  records depend on step IDs.
+- Workflow service reuses Phase 1 organization membership authorization; all
+  repository reads, writes, status changes, and deletes also match both
+  workflow ID and organization ID. Owners and members share all Phase 2
+  workflow permissions. Non-members see `ORGANIZATION_NOT_FOUND`; a workflow
+  from a different organization appears as `WORKFLOW_NOT_FOUND` to a member of
+  the requested organization.
+- DELETE hard deletes a workflow and cascades its steps because execution
+  history does not exist. Activate/deactivate only change status and updated
+  time; they do not enqueue or execute. Invalid activation returns
+  `400 WORKFLOW_INVALID` with field paths. Unexpected internal errors retain
+  the existing generic API response.
+- Added a React workflow list and ordered editor under a selected
+  organization. It supports creation, opening, metadata/trigger edits, adding
+  and editing conditions and actions, removing and reordering steps, saving,
+  activation/deactivation, and deletion. The UI exposes required action fields.
+  Optional HTTP headers, AI output schema, and retry settings are validated and
+  stored by the API but are not yet editable in the UI.
+- No new dependency or execution, queue, webhook intake, action call, AI call,
+  credential store, or execution table was added.
+
+### Database and Migration State
+
+- Preserved Phase 1 `apps/api/drizzle/0000_soft_next_avengers.sql` unchanged.
+- Generated and applied `apps/api/drizzle/0001_previous_amazoness.sql`; added
+  `apps/api/drizzle/meta/0001_snapshot.json` and updated `meta/_journal.json`.
+- Applied only to dedicated `opsflow_test` at
+  `postgresql://opsflow_test@127.0.0.1:55433/opsflow_test`. Integration tests
+  guard the `/opsflow_test` database name before truncating fixtures. No seed
+  data or unrelated database was changed.
+
+### Exact Files Changed in Phase 2
+
+Added:
+
+- `apps/api/drizzle/0001_previous_amazoness.sql`, `apps/api/drizzle/meta/0001_snapshot.json`
+- `apps/api/src/workflows/repository.ts`, `apps/api/src/workflows/service.ts`, `apps/api/src/workflows/routes.ts`, `apps/api/src/workflows/validation.ts`
+- `apps/web/src/WorkflowWorkspace.tsx`
+- `packages/shared/src/workflows.ts`, `packages/shared/src/workflows.test.ts`
+
+Modified:
+
+- `apps/api/drizzle/meta/_journal.json`, `apps/api/src/app.ts`, `apps/api/src/db/schema.ts`, `apps/api/src/errors.ts`, `apps/api/src/phase1.integration.test.ts`
+- `apps/web/src/App.tsx`, `apps/web/src/api.ts`, `packages/shared/src/index.ts`
+- `README.md`, `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/DEVELOPMENT.md`, `docs/ROADMAP.md`, `docs/SECURITY.md`, `docs/CHANGELOG.md`, `docs/HANDOFF.md`
+
+### Exact Commands Run and Results
+
+- `git status --short --branch`, `git log -5 --oneline`, `git remote -v`,
+  `rg --files -g '!node_modules' -g '!.local'`, and source/doc `Get-Content`
+  reads: confirmed clean Phase 1 base and one commit; no Git remote.
+- `npm run typecheck`: initial runs caught two TypeScript typing mistakes in
+  new code, fixed; final run passed all workspaces.
+- `$env:DATABASE_URL='postgresql://opsflow_test@127.0.0.1:55433/opsflow_test'; npm run db:generate`:
+  initial sandboxed Drizzle/esbuild child spawn returned `EPERM` despite npm's
+  zero exit code; permitted retry passed and generated migration 0001.
+- `& 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D (Join-Path (Get-Location) '.local\pgdata') -l (Join-Path (Get-Location) '.local\postgres.log') -o '-p 55433 -h 127.0.0.1' start`:
+  passed for existing isolated test cluster. Initial `pg_ctl ... status`
+  confirmed it was stopped.
+- `$env:DATABASE_URL='postgresql://opsflow_test@127.0.0.1:55433/opsflow_test'; npm run db:migrate`:
+  passed; Phase 2 migration applied.
+- `$env:TEST_DATABASE_URL='postgresql://opsflow_test@127.0.0.1:55433/opsflow_test'; npm test`:
+  first run had three new workflow test failures from passing full workflow
+  rows to a strict input schema; fixed. Final run: **24 tests in 5 files
+  passed**, including database integration coverage for CRUD, authorization,
+  cross-organization access, validation, activation, versioning, and ordering.
+- `npm run lint`: first run found two unused imports; fixed. Final run passed.
+- `npm run typecheck`: passed after final code changes.
+- `npm run build`: passed for shared, config, API, worker, and web. Vite emitted
+  nonfatal Zod comment and >500 kB chunk warnings.
+- `npx prettier --write ...`: formatted changed TypeScript and Drizzle metadata.
+  `npm run format:check` initially identified three files; formatted them and
+  final check passed.
+- `git diff --check`: passed, with Git's Windows LF-to-CRLF conversion warnings.
+- `Get-Command docker -ErrorAction SilentlyContinue`: Docker not available on
+  PATH; Compose and Redis readiness were not claimed or tested.
+- `& 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D (Join-Path (Get-Location) '.local\pgdata') stop -m fast`:
+  passed; isolated test cluster stopped after tests.
+
+### Known Issues, Limits, and Assumptions
+
+- Docker Compose and Redis-backed worker readiness remain unverified locally;
+  Docker is not installed/on PATH. GitHub Actions has not run because this
+  repository has no remote. The unrelated machine PostgreSQL on 5432 remains
+  untouched; Compose defaults to host port 5433.
+- The web editor omits optional HTTP headers, AI output schema, and retry
+  controls. The API supports them. Step IDs change after a material step edit.
+  No workflow execution or execution history exists yet.
+- The production web build reports a >500 kB chunk warning. This is not a
+  build failure. Previous Drizzle Kit/esbuild transitive dependency advisories
+  were not reevaluated or changed in Phase 2.
+- `npm test` skips database integration cases without `TEST_DATABASE_URL`;
+  CI supplies the dedicated PostgreSQL database. `opsflow_test` is disposable
+  test data only. Schedule timezone, when omitted, is intended to mean UTC
+  when scheduling is implemented later.
+
+### Unfinished Work and Exact Recommended Next Action
+
+Do not start execution work in this phase. Commit/review the uncommitted Phase
+2 changes. In an environment with Docker, start Compose services, apply
+committed migrations to an OpsFlow database, and confirm worker Redis
+readiness; publish to GitHub and run CI when ready. Then begin Phase 3 — Queue
+and Worker by designing versioned workflow definition snapshots alongside
+execution rows, wiring BullMQ to the existing Redis client, and keeping the
+Phase 2 API contracts intact. Do not use changing step IDs as historic
+execution references without a snapshot strategy.
+
+---
+
+## Previous State — Phase 1
 
 ### Active Milestone
 
@@ -339,3 +489,18 @@ cluster was isolated from the machine's existing PostgreSQL installation.
 Next:
 Verify Compose and worker readiness when Docker is available, then begin
 Phase 2 after publishing and confirming CI.
+
+### Entry 004 — Phase 2 workflow CRUD
+
+Agent:
+Codex
+
+Summary:
+Added workflow and ordered-step migration, shared configuration schemas,
+organization-scoped CRUD and activation API, a linear editor, and PostgreSQL
+integration tests. All requested local checks passed; Docker and GitHub CI
+remain unavailable for verification here.
+
+Next:
+Review and commit Phase 2, verify Compose/CI when available, then begin
+Phase 3 with a workflow definition snapshot strategy before execution records.

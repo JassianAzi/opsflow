@@ -13,8 +13,9 @@ npm run services:check
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173` for registration, login, and organizations, and
-`http://127.0.0.1:4000/health` for API liveness. Stop the app processes with
+Open `http://127.0.0.1:5173` for registration, login, organizations, and
+workflow management. Check `http://127.0.0.1:4000/health` for API liveness.
+Stop the app processes with
 Ctrl+C and local services with `docker compose down`. Docker named volumes
 retain PostgreSQL and Redis data.
 
@@ -64,7 +65,7 @@ REDIS_URL=redis://localhost:6379
 The sample password is local only. Keep `POSTGRES_PASSWORD` and the password in
 `DATABASE_URL` in sync. Do not commit `.env`. The API and worker validate
 `NODE_ENV`, `API_PORT`, `API_HOST`, `WEB_ORIGIN`, `DATABASE_URL`, and
-`REDIS_URL` at startup. No session or AI credentials are needed in Phase 1.
+`REDIS_URL` at startup. No session or AI credentials are needed in Phase 2.
 The web port is fixed at 5173 in Vite configuration; Vite proxies `/api` to
 the configured API host and port.
 
@@ -86,7 +87,8 @@ Implemented root scripts:
 
 `npm run db:generate` and `npm run db:migrate` use Drizzle Kit. Phase 1's
 committed migration creates users, sessions, organizations, and memberships.
-Generate and commit a versioned SQL migration for every later schema change.
+Phase 2's migration creates workflows and workflow steps. Generate and commit
+a versioned SQL migration for every later schema change.
 Do not use schema push in place of migrations.
 
 API integration tests run when `TEST_DATABASE_URL` points to a **dedicated**
@@ -102,6 +104,16 @@ TEST_DATABASE_URL=postgresql://opsflow:opsflow_local@localhost:5433/opsflow_test
 Create `opsflow_test` separately first, using credentials with access to that
 database. Do not point the test suite at an existing application database.
 In PowerShell, set `$env:TEST_DATABASE_URL` before running `npm test`.
+
+Create a draft workflow in an organization, open it from the list, select a
+trigger, add conditions and actions, and save the configuration. The editor
+uses one PATCH request for the entire ordered step array. Activation checks
+the complete definition; it does not start a job. Schedule cron uses five
+numeric fields (minute, hour, day of month, month, weekday) and optionally an
+IANA timezone. When timezone is omitted, future scheduling should interpret
+the expression in UTC. The editor currently exposes required action fields;
+optional HTTP headers, AI output schema, and retry settings can be sent through
+the API but are not yet editable in the UI.
 
 Docker is optional for code changes and unit checks. If a local PostgreSQL
 server is available, point `DATABASE_URL` at a dedicated OpsFlow database and

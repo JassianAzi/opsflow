@@ -59,6 +59,14 @@ changes require owner status. A transaction locks the organization row while
 checking owner count, preventing concurrent demotions from removing its last
 owner.
 
+Phase 2 workflow routes require an authenticated organization member. The
+service checks membership, and repository lookups and mutations scope workflow
+IDs to the organization ID. Owners and members may create, edit, activate,
+deactivate, and delete workflows. Activation validates the saved definition;
+it does not run it. HTTP configuration rejects common credential-bearing
+header names, and the UI warns users not to enter credentials. No credential
+vault exists yet, so workflow JSON must not contain secrets.
+
 ## 5. Webhook Security
 
 Future production webhook protections should include:
@@ -70,7 +78,8 @@ Future production webhook protections should include:
 
 ## 6. HTTP Action Security
 
-The HTTP request workflow action creates SSRF risk.
+The HTTP request workflow action will create SSRF risk when execution is added
+in Phase 6. Phase 2 only stores the configuration and requires an HTTP(S) URL.
 
 Before production deployment:
 - block localhost

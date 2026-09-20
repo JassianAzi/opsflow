@@ -4,10 +4,11 @@
 
 OpsFlow uses a local-first, service-oriented monorepo architecture.
 
-The diagram below is the intended product architecture. Phase 1 currently
-contains a React authentication and organization interface, Fastify session
-routes, four PostgreSQL tables, and a separate worker process that checks Redis
-connectivity. No queue or workflow engine is implemented yet.
+The diagram below is the intended product architecture. Phase 2 currently
+contains React authentication, organization, and workflow management views;
+Fastify API routes for those features; six PostgreSQL tables; and a separate
+worker process that checks Redis connectivity. No queue or workflow execution
+is implemented yet.
 
 ```text
 Browser
@@ -92,10 +93,18 @@ add database access when execution work begins. Both Node processes validate
 their required URLs at startup. The API health route is a liveness response and
 does not imply PostgreSQL or Redis readiness; `npm run services:check` tests
 both connections explicitly. API routes call services, which use dedicated
-auth and organization repositories. Organization reads join membership for the
+auth, organization, and workflow repositories. Organization reads join membership for the
 current user; member role changes lock the organization row in a transaction.
 The web app uses the Vite `/api` proxy locally so browser cookies remain on a
 single origin.
+
+Phase 2 workflow routes parse shared Zod schemas, delegate to a workflow
+service, and reuse the Phase 1 organization membership check. Workflow queries
+also scope IDs to `organization_id`, including reads, updates, status changes,
+and deletes. The editor sends a full ordered step array through one PATCH
+endpoint; the API validates and replaces the step set in a transaction.
+Workflow steps are configuration only. They do not call providers, enqueue
+work, or create execution records.
 
 ## 4. Workflow Model
 
@@ -117,7 +126,14 @@ Action 2
 ...
 ```
 
-Initial implementation should prefer a linear workflow model.
+The Phase 2 model is linear: all conditions precede all actions. Submitted
+step array positions become consecutive zero-based `step_order` values.
+Activation requires at least one action and a complete trigger. Drafts can
+contain zero steps. A successful configuration change increments `version`;
+status changes do not. Steps are replaced as a set when their configuration
+changes, so their IDs are not stable across an edited step set. Future
+execution records will need a versioned definition snapshot or equivalent
+before retaining references to historic steps.
 
 Do not build a complex graph editor during MVP.
 

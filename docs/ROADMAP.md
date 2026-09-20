@@ -25,7 +25,7 @@ Implementation note: install, lint, typecheck, tests, and build passed locally.
 The API and web dev server responded locally. Docker was unavailable on the
 implementation machine, so PostgreSQL/Redis containers and the Redis-dependent
 worker boot still need a local Docker check. CI workflow is present but has not
-run on GitHub. Phase 1 has not started.
+run on GitHub.
 
 ## Phase 1 — Authentication and Organizations (implemented)
 
@@ -51,7 +51,7 @@ isolated local test cluster. Frontend registration, login, logout,
 organization list, create, and selection are implemented. GitHub CI and the
 Docker Compose services have not yet been run on this machine.
 
-## Phase 2 — Workflow CRUD
+## Phase 2 — Workflow CRUD (implemented)
 
 Goals:
 - workflow tables
@@ -66,6 +66,12 @@ Goals:
 
 Exit criteria:
 - a workflow can be fully configured and persisted
+
+Phase 2 schema, API, shared validation, editor, and PostgreSQL integration
+tests are implemented. Activation changes state but does not execute. The
+frontend does not expose optional HTTP headers, AI output schema, or retry
+settings yet, though the API validates and stores them. Docker Compose and
+GitHub CI still need validation in an environment where they are available.
 
 ## Phase 3 — Queue and Worker
 

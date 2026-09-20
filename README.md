@@ -55,8 +55,9 @@ npm run dev
 ```
 
 The web app is at `http://127.0.0.1:5173`, and the API health check is at
-`http://127.0.0.1:4000/health`. Register, sign in, and create an organization
-in the web app. The worker connects to Redis and waits; job processing begins
+`http://127.0.0.1:4000/health`. Register, sign in, create an organization, and
+configure workflows in the web app. Activation stores a status change but does
+not run the workflow. The worker connects to Redis and waits; job processing begins
 in Phase 3. PostgreSQL uses host port 5433 by default to avoid a local 5432
 conflict, while its container still uses 5432. The sample password in
 `.env.example` is for local development only. Change `POSTGRES_PASSWORD` and
@@ -152,9 +153,10 @@ The first portfolio-ready workflow should demonstrate:
 
 ## Status
 
-Phase 1 authentication and organizations are implemented. Workflow behavior and
-related domain tables have not started. Docker Compose has not been run on the
-implementation machine; Phase 1 migrations and integration tests were verified
-against an isolated local PostgreSQL test database.
+Phase 2 workflow CRUD is implemented, including triggers, ordered conditions
+and actions, activation validation, and a workflow editor. There is no workflow
+execution yet. Docker Compose has not been run on this development machine;
+migrations and API integration tests were verified against an isolated local
+PostgreSQL test database.
 
 See `docs/ROADMAP.md` for implementation milestones.

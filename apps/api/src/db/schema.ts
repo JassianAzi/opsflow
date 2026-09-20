@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
 import {
   index,
+  integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -12,6 +14,27 @@ import {
 export const organizationRole = pgEnum('organization_role', [
   'owner',
   'member',
+]);
+export const workflowStatus = pgEnum('workflow_status', [
+  'draft',
+  'active',
+  'inactive',
+]);
+export const workflowTriggerType = pgEnum('workflow_trigger_type', [
+  'manual',
+  'webhook',
+  'schedule',
+]);
+export const workflowStepType = pgEnum('workflow_step_type', [
+  'condition',
+  'action',
+]);
+export const workflowActionType = pgEnum('workflow_action_type', [
+  'log',
+  'internal_task',
+  'mock_email',
+  'http_request',
+  'ai',
 ]);
 
 export const users = pgTable(
@@ -92,5 +115,70 @@ export const organizationMembers = pgTable(
       table.userId,
     ),
     index('organization_members_user_id_idx').on(table.userId),
+  ],
+);
+
+export const workflows = pgTable(
+  'workflows',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    status: workflowStatus('status').notNull().default('draft'),
+    triggerType: workflowTriggerType('trigger_type').notNull(),
+    triggerConfig: jsonb('trigger_config')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    version: integer('version').notNull().default(1),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('workflows_organization_updated_idx').on(
+      table.organizationId,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const workflowSteps = pgTable(
+  'workflow_steps',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    stepOrder: integer('step_order').notNull(),
+    stepType: workflowStepType('step_type').notNull(),
+    actionType: workflowActionType('action_type'),
+    name: text('name').notNull(),
+    config: jsonb('config').$type<Record<string, unknown>>().notNull(),
+    retryConfig: jsonb('retry_config')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('workflow_steps_workflow_order_unique').on(
+      table.workflowId,
+      table.stepOrder,
+    ),
   ],
 );

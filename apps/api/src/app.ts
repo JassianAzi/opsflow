@@ -9,6 +9,9 @@ import { createOrganizationRepository } from './organizations/repository.js';
 import { createOrganizationService } from './organizations/service.js';
 import { registerOrganizationRoutes } from './organizations/routes.js';
 import { ApiError, installErrorHandler } from './errors.js';
+import { createWorkflowRepository } from './workflows/repository.js';
+import { createWorkflowService } from './workflows/service.js';
+import { registerWorkflowRoutes } from './workflows/routes.js';
 
 export interface AppOptions {
   database: Database;
@@ -51,6 +54,11 @@ export function buildApp(options: AppOptions) {
   );
   registerAuthRoutes(app, auth, options.production);
   registerOrganizationRoutes(app, auth, organizations);
+  const workflows = createWorkflowService(
+    createWorkflowRepository(options.database),
+    organizations,
+  );
+  registerWorkflowRoutes(app, auth, workflows);
 
   return app;
 }

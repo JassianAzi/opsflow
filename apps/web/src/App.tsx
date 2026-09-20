@@ -5,6 +5,7 @@ import type {
   PublicUser,
 } from '@opsflow/shared';
 import { api } from './api';
+import { WorkflowWorkspace } from './WorkflowWorkspace';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The request failed.';
@@ -234,6 +235,14 @@ export function App() {
                 </p>
               )}
             </section>
+            {selected && (
+              <div className="md:col-span-2">
+                <WorkflowWorkspace
+                  key={selected.id}
+                  organizationId={selected.id}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <section className="mx-auto max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-8">

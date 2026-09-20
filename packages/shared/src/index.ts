@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export * from './workflows.js';
 
 export const serviceNameSchema = z.enum(['api', 'worker']);
 

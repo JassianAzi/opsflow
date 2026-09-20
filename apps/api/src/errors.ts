@@ -6,6 +6,7 @@ export class ApiError extends Error {
     public readonly statusCode: number,
     public readonly code: string,
     message: string,
+    public readonly details?: { path: string; message: string }[],
   ) {
     super(message);
   }
@@ -14,9 +15,13 @@ export class ApiError extends Error {
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) {
-      return reply
-        .code(error.statusCode)
-        .send({ error: { code: error.code, message: error.message } });
+      return reply.code(error.statusCode).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        },
+      });
     }
     if (error instanceof ZodError) {
       return reply.code(400).send({

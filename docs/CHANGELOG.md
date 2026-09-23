@@ -6,6 +6,15 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 3 — Milestone 2 Execution Contracts and Migration
+
+- added shared Zod contracts for execution and step statuses, immutable workflow and step snapshots, persisted execution steps, and the minimal `{ executionId }` queue job
+- added `workflow_executions`, `execution_steps`, and `execution_queue_outbox` in migration `0003_chilly_texas_twister.sql`
+- added tenant-consistent workflow execution foreign keys, restrictive workflow history deletion, immutable step copies without mutable step foreign keys, idempotency and ordering indexes, and lifecycle checks
+- constrained each durable outbox payload to the matching execution ID and added dispatch lookup state without dispatching jobs
+- added focused shared contract and PostgreSQL integrity tests, including direct coverage for execution idempotency, retry bounds, and timestamp ordering; no execution API, BullMQ producer/consumer, or workflow action behavior was added
+- clarified that Docker Compose, Redis, and worker readiness passed the later Milestone 1 gate while hosted GitHub Actions remains unverified
+
 ### Phase 3 — Milestone 1 Infrastructure Gate
 
 - statically verified the existing PostgreSQL and Redis Compose definitions, configurable host ports, health checks, and persistent volumes

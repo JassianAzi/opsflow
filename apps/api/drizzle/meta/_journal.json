@@ -22,6 +22,13 @@
       "when": 1790148303348,
       "tag": "0002_sticky_joseph",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790170008170,
+      "tag": "0003_chilly_texas_twister",
+      "breakpoints": true
     }
   ]
 }

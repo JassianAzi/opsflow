@@ -1,14 +1,18 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { createHash, randomUUID } from 'node:crypto';
+import { eq, sql } from 'drizzle-orm';
+import { workflowExecutionSnapshotSchema } from '@opsflow/shared';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { buildApp } from './app.js';
 import { createDatabase } from './db/client.js';
 import {
+  executionQueueOutbox,
+  executionSteps,
   organizationMembers,
   sessions,
   users,
+  workflowExecutions,
   workflowSteps,
   workflows,
 } from './db/schema.js';
@@ -52,7 +56,7 @@ databaseDescribe(
 
     beforeEach(async () => {
       await database.db.execute(
-        sql`TRUNCATE TABLE workflow_steps, workflows, organization_members, organizations, sessions, users CASCADE`,
+        sql`TRUNCATE TABLE execution_queue_outbox, execution_steps, workflow_executions, workflow_steps, workflows, organization_members, organizations, sessions, users CASCADE`,
       );
     });
 
@@ -810,6 +814,268 @@ databaseDescribe(
             field: 'customer.status',
             operator: 'exists',
           },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('persists execution and step snapshots independently of mutable workflow steps', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const created = (await createWorkflow(organizationId, alice)).json()
+        .workflow;
+      const configured = await app.inject({
+        method: 'PATCH',
+        url: `/api/organizations/${organizationId}/workflows/${created.id}`,
+        headers: { cookie: alice },
+        payload: {
+          expectedVersion: 1,
+          steps: [
+            {
+              stepType: 'action',
+              actionType: 'log',
+              name: 'Record event',
+              config: { message: 'Received' },
+              retryConfig: { maxAttempts: 2 },
+            },
+          ],
+        },
+      });
+      const workflow = configured.json().workflow;
+      const step = workflow.steps[0];
+      const snapshot = workflowExecutionSnapshotSchema.parse({
+        workflowId: workflow.id,
+        organizationId,
+        workflowVersion: workflow.version,
+        name: workflow.name,
+        description: workflow.description,
+        triggerType: workflow.triggerType,
+        triggerConfig: workflow.triggerConfig,
+        steps: [
+          {
+            workflowStepId: step.id,
+            stepOrder: step.stepOrder,
+            stepType: step.stepType,
+            actionType: step.actionType,
+            name: step.name,
+            config: step.config,
+            retryConfig: step.retryConfig,
+          },
+        ],
+      });
+      const [execution] = await database.db
+        .insert(workflowExecutions)
+        .values({
+          organizationId,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          triggerType: workflow.triggerType,
+          triggerPayload: { source: 'test' },
+          workflowSnapshot: snapshot,
+        })
+        .returning();
+      await database.db.insert(executionSteps).values({
+        executionId: execution.id,
+        workflowStepId: step.id,
+        stepOrder: step.stepOrder,
+        stepType: step.stepType,
+        actionType: step.actionType,
+        name: step.name,
+        config: step.config,
+        retryConfig: step.retryConfig,
+      });
+      await database.db.insert(executionQueueOutbox).values({
+        executionId: execution.id,
+        jobPayload: { executionId: execution.id },
+      });
+
+      await database.db
+        .delete(workflowSteps)
+        .where(eq(workflowSteps.id, step.id));
+
+      const [persistedExecution] = await database.db
+        .select()
+        .from(workflowExecutions)
+        .where(eq(workflowExecutions.id, execution.id));
+      const [persistedStep] = await database.db
+        .select()
+        .from(executionSteps)
+        .where(eq(executionSteps.executionId, execution.id));
+      expect(persistedExecution.workflowSnapshot).toEqual(snapshot);
+      expect(persistedStep).toMatchObject({
+        workflowStepId: step.id,
+        name: 'Record event',
+        config: { message: 'Received' },
+        status: 'pending',
+      });
+      await expect(
+        database.db.delete(workflows).where(eq(workflows.id, workflow.id)),
+      ).rejects.toThrow();
+      expect(
+        await database.db
+          .select()
+          .from(workflowExecutions)
+          .where(eq(workflowExecutions.id, execution.id)),
+      ).toHaveLength(1);
+    });
+
+    it('enforces execution tenant, ordering, and outbox payload constraints', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const otherOrganizationId = (
+        await createOrganization(alice, 'Other organization')
+      ).json().organization.id as string;
+      const workflow = (await createWorkflow(organizationId, alice)).json()
+        .workflow;
+      const workflowStepId = randomUUID();
+      const snapshot = workflowExecutionSnapshotSchema.parse({
+        workflowId: workflow.id,
+        organizationId,
+        workflowVersion: workflow.version,
+        name: workflow.name,
+        description: workflow.description,
+        triggerType: workflow.triggerType,
+        triggerConfig: workflow.triggerConfig,
+        steps: [
+          {
+            workflowStepId,
+            stepOrder: 0,
+            stepType: 'action',
+            actionType: 'log',
+            name: 'Record event',
+            config: { message: 'Received' },
+            retryConfig: {},
+          },
+        ],
+      });
+
+      await expect(
+        database.db.insert(workflowExecutions).values({
+          organizationId: otherOrganizationId,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          triggerType: workflow.triggerType,
+          triggerPayload: {},
+          workflowSnapshot: snapshot,
+        }),
+      ).rejects.toThrow();
+
+      const [execution] = await database.db
+        .insert(workflowExecutions)
+        .values({
+          organizationId,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          triggerType: workflow.triggerType,
+          triggerPayload: {},
+          workflowSnapshot: snapshot,
+        })
+        .returning();
+      await expect(
+        database.db.insert(executionSteps).values({
+          executionId: execution.id,
+          workflowStepId,
+          stepOrder: -1,
+          stepType: 'action',
+          actionType: 'log',
+          name: 'Invalid order',
+          config: { message: 'No' },
+          retryConfig: {},
+        }),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(executionQueueOutbox).values({
+          executionId: execution.id,
+          jobPayload: { executionId: randomUUID() },
+        }),
+      ).rejects.toThrow();
+      await database.db.insert(executionQueueOutbox).values({
+        executionId: execution.id,
+        jobPayload: { executionId: execution.id },
+      });
+      await expect(
+        database.db.insert(executionQueueOutbox).values({
+          executionId: execution.id,
+          jobPayload: { executionId: execution.id },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('enforces execution idempotency, retry, and timestamp constraints', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = (await createWorkflow(organizationId, alice)).json()
+        .workflow;
+      const workflowStepId = randomUUID();
+      const snapshot = workflowExecutionSnapshotSchema.parse({
+        workflowId: workflow.id,
+        organizationId,
+        workflowVersion: workflow.version,
+        name: workflow.name,
+        description: workflow.description,
+        triggerType: workflow.triggerType,
+        triggerConfig: workflow.triggerConfig,
+        steps: [
+          {
+            workflowStepId,
+            stepOrder: 0,
+            stepType: 'action',
+            actionType: 'log',
+            name: 'Record event',
+            config: { message: 'Received' },
+            retryConfig: {},
+          },
+        ],
+      });
+      const executionValues = {
+        organizationId,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        triggerType: workflow.triggerType,
+        triggerPayload: {},
+        workflowSnapshot: snapshot,
+        idempotencyKey: 'test-run-1',
+      };
+      const [execution] = await database.db
+        .insert(workflowExecutions)
+        .values(executionValues)
+        .returning();
+
+      await expect(
+        database.db.insert(workflowExecutions).values(executionValues),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(executionQueueOutbox).values({
+          executionId: execution.id,
+          jobPayload: { executionId: execution.id },
+          attemptCount: -1,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(workflowExecutions).values({
+          ...executionValues,
+          idempotencyKey: 'reversed-execution',
+          startedAt: new Date('2026-01-01T00:00:02.000Z'),
+          completedAt: new Date('2026-01-01T00:00:01.000Z'),
+        }),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(executionSteps).values({
+          executionId: execution.id,
+          workflowStepId,
+          stepOrder: 0,
+          stepType: 'action',
+          actionType: 'log',
+          name: 'Record event',
+          config: { message: 'Received' },
+          retryConfig: {},
+          startedAt: new Date('2026-01-01T00:00:02.000Z'),
+          completedAt: new Date('2026-01-01T00:00:01.000Z'),
         }),
       ).rejects.toThrow();
     });

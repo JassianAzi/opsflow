@@ -154,9 +154,10 @@ The first portfolio-ready workflow should demonstrate:
 ## Status
 
 Phase 2 workflow CRUD is implemented, including triggers, ordered conditions
-and actions, activation validation, and a workflow editor. There is no workflow
-execution yet. Docker Compose has not been run on this development machine;
-migrations and API integration tests were verified against an isolated local
-PostgreSQL test database.
+and actions, activation validation, and a workflow editor. Phase 3 now has a
+verified local PostgreSQL/Redis/worker infrastructure gate plus immutable
+execution snapshot, execution step, and durable queue outbox storage contracts.
+No API trigger, queue dispatcher, job consumer, or workflow step execution is
+implemented yet.
 
 See `docs/ROADMAP.md` for implementation milestones.

@@ -6,7 +6,165 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 3 Milestone 1 Infrastructure Gate
+## Current State — Phase 3 Milestone 2 Execution Contracts and Migration
+
+### Milestone and Status
+
+Phase 3 Milestone 2 is **complete for the requested contracts and migration
+scope**. Shared schemas and PostgreSQL storage now define immutable workflow
+execution snapshots, copied execution step definitions and state, and a
+durable queue outbox whose job payload contains only `executionId`.
+
+No manual test endpoint, execution service/repository, outbox dispatcher,
+BullMQ producer or consumer, worker database access, status processor, or
+workflow step execution was added. Phase 3 Milestone 1 is committed as
+`8b22d3e5f6ac659bc690b2ebe399a51c70c28b0c chore: verify phase 3 infrastructure
+gate`.
+
+### Contracts and Storage Decisions
+
+- `packages/shared/src/executions.ts` defines execution, execution step, and
+  outbox statuses; immutable workflow and step snapshot schemas; the persisted
+  execution step response shape; and strict queue jobs shaped only as
+  `{ executionId: uuid }`.
+- Executable snapshots require a valid trigger, at least one action,
+  consecutive zero-based step order, conditions before actions, and valid
+  action-specific configuration. Schedule snapshots require a cron expression.
+- `workflow_executions.workflow_snapshot` stores the workflow identity,
+  organization, version, metadata, trigger configuration, and complete ordered
+  step definitions captured for one run.
+- `execution_steps` copies `workflow_step_id`, order, type, action type, name,
+  config, and retry config. `workflow_step_id` has no foreign key to mutable
+  `workflow_steps`, so editing or deleting source steps cannot rewrite history.
+- The execution-to-workflow relationship uses a composite
+  `(workflow_id, organization_id)` foreign key. This enforces tenant
+  consistency and uses restrictive deletion, so deleting a workflow cannot
+  cascade away execution history.
+- Workflow idempotency keys are unique per workflow. Execution and step
+  listing/status indexes support later API and worker queries.
+- `execution_queue_outbox` has one row per execution, retry/availability state,
+  and a database check requiring `job_payload` to equal the matching
+  `{ "executionId": execution_id }`. Milestone 3 must create the execution,
+  steps, and outbox row atomically before adding a dispatcher.
+
+### Migration and Database State
+
+- Added `apps/api/drizzle/0003_chilly_texas_twister.sql` and
+  `apps/api/drizzle/meta/0003_snapshot.json`; updated only the Drizzle journal
+  metadata needed to register migration 0003.
+- Migrations `0000_soft_next_avengers.sql`,
+  `0001_previous_amazoness.sql`, and `0002_sticky_joseph.sql` are unchanged.
+- Drizzle initially generated the composite workflow index after its dependent
+  foreign key. The new, unapplied migration was corrected to create the unique
+  index first.
+- A fresh disposable PostgreSQL 16 container named
+  `opsflow-m2-db-29792-e1a271b9` exposed only a dynamically assigned local port
+  and contained a dedicated `opsflow_test` database. Migrations 0000–0003
+  applied successfully; the migration catalog contained four entries and all
+  three new tables were present. The container was removed after tests. No
+  existing, unrelated, or production database was accessed.
+
+### Focused Tests
+
+- Shared contract tests accept complete snapshots and reject malformed action
+  configuration, nondeterministic order, incomplete schedules, missing
+  actions, unsupported statuses, and queue payloads with missing or extra
+  fields.
+- PostgreSQL tests persist an execution, copied step, and outbox row; delete
+  the mutable source step; confirm both snapshots remain; and confirm workflow
+  deletion is restricted while history exists.
+- PostgreSQL tests reject cross-organization workflow execution references,
+  negative execution step order, mismatched outbox payloads, and duplicate
+  outbox rows.
+- Review follow-up tests reject duplicate idempotency keys for one workflow,
+  negative outbox attempt counts, and reversed execution and execution-step
+  timestamps.
+
+### Files Changed in Milestone 2
+
+Added:
+
+- `apps/api/drizzle/0003_chilly_texas_twister.sql`
+- `apps/api/drizzle/meta/0003_snapshot.json`
+- `packages/shared/src/executions.ts`
+- `packages/shared/src/executions.test.ts`
+
+Modified:
+
+- `apps/api/drizzle/meta/_journal.json`
+- `apps/api/src/db/schema.ts`
+- `apps/api/src/phase1.integration.test.ts`
+- `packages/shared/src/index.ts`
+- `README.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DATABASE.md`
+- `docs/ROADMAP.md`
+- `docs/CHANGELOG.md`
+- `docs/HANDOFF.md`
+
+### Commands and Results
+
+- Milestone 1 closeout: `npm run lint`, `npm run typecheck`,
+  `npm run format:check`, Windows PowerShell 5.1 parsing, and staged
+  `git diff --check`: passed; commit
+  `8b22d3e5f6ac659bc690b2ebe399a51c70c28b0c` created.
+- `npm run build -w @opsflow/shared`: passed.
+- `npx vitest run packages/shared/src/executions.test.ts`: 5 tests passed.
+- `npm run db:generate`: passed and generated migration 0003. A direct diff
+  confirmed migrations 0000–0002 remained unchanged.
+- `npm run typecheck`: passed after the schema and test changes.
+- Disposable PostgreSQL `docker run ... postgres:16-alpine`: reached healthy.
+- With `DATABASE_URL` set only to the disposable `opsflow_test`,
+  `npm run db:migrate`: passed; four migrations and the three new execution
+  tables were confirmed through `psql`.
+- With `TEST_DATABASE_URL` set only to that same disposable database,
+  `npm test`: 38 tests in 7 files passed.
+- `docker rm --force opsflow-m2-db-29792-e1a271b9`: passed; disposable database
+  cleanup completed.
+- Final `npm run lint`: passed.
+- Final `npm run format:check`: initially identified only generated migration
+  journal/snapshot JSON formatting; `npx prettier --write` corrected those two
+  files and the rerun passed.
+- Final `npm run typecheck`: passed for every workspace.
+- Final `npm run build`: passed for every workspace. Vite retained the existing
+  nonfatal Zod annotation and greater-than-500-kB chunk warnings.
+- `npm exec --workspace @opsflow/api drizzle-kit check`: passed with
+  `Everything's fine`.
+- `git diff --exit-code HEAD --` for migrations 0000–0002: passed unchanged.
+- `git diff --check`: passed with line-ending notices only.
+- Independent Milestone 2 review found no blocking implementation defect. It
+  identified stale roadmap infrastructure wording and missing direct coverage
+  for several database constraints; both were corrected before commit.
+- A new disposable PostgreSQL 16 container named
+  `opsflow-m2-close-51d473e809` used dynamically assigned host port `61120`.
+  `npm run db:migrate` applied migrations 0000–0003 successfully and
+  `npm test` passed **39 tests in 7 files**. The container was force-removed
+  after the run.
+
+### Git State
+
+`main` points to the Milestone 1 commit
+`8b22d3e5f6ac659bc690b2ebe399a51c70c28b0c`. The Milestone 2 files listed
+above are ready for their separate commit after independent review. No other
+tracked or untracked file is present in the working tree.
+
+### Open Issues and Recommended Next Action
+
+- Hosted GitHub Actions remains unverified because no hosted run is available.
+- The optional concurrent PATCH interleaving and rendered dirty-navigation
+  tests remain deferred. The membership-revocation timing window remains
+  tracked for future authorization work.
+- Milestone 3 should add an authenticated manual test endpoint and an
+  execution service that locks and validates an active workflow, captures its
+  snapshot, inserts execution/step/outbox rows in one transaction, then
+  dispatches only committed outbox rows to BullMQ. Worker consumption and
+  state transitions should be added and verified separately before action
+  behavior begins.
+
+---
+
+## Previous State — Phase 3 Milestone 1 Infrastructure Gate
 
 ### Milestone and Status
 

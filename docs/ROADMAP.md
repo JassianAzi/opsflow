@@ -2,7 +2,7 @@
 
 The roadmap is intentionally milestone-based so each AI coding agent can complete one coherent unit of work before handing off.
 
-## Phase 0 — Repository Foundation (implemented; infrastructure boot pending local Docker validation)
+## Phase 0 — Repository Foundation (implemented)
 
 Goals:
 - initialize monorepo
@@ -22,10 +22,10 @@ Exit criteria:
 - CI passes
 
 Implementation note: install, lint, typecheck, tests, and build passed locally.
-The API and web dev server responded locally. Docker was unavailable on the
-implementation machine, so PostgreSQL/Redis containers and the Redis-dependent
-worker boot still need a local Docker check. CI workflow is present but has not
-run on GitHub.
+The API and web dev server responded locally. Docker was unavailable during
+Phase 0, but PostgreSQL, Redis, and worker readiness subsequently passed the
+Phase 3 Milestone 1 infrastructure gate. CI workflow is present but has not run
+on GitHub.
 
 ## Phase 1 — Authentication and Organizations (implemented)
 
@@ -48,8 +48,9 @@ Exit criteria:
 
 Phase 1 implementation and PostgreSQL integration tests passed against an
 isolated local test cluster. Frontend registration, login, logout,
-organization list, create, and selection are implemented. GitHub CI and the
-Docker Compose services have not yet been run on this machine.
+organization list, create, and selection are implemented. Docker Compose and
+worker readiness subsequently passed the Phase 3 Milestone 1 infrastructure
+gate. Hosted GitHub Actions remains unverified.
 
 ## Phase 2 — Workflow CRUD (implemented)
 
@@ -70,10 +71,19 @@ Exit criteria:
 Phase 2 schema, API, shared validation, editor, and PostgreSQL integration
 tests are implemented. Activation changes state but does not execute. The
 frontend does not expose optional HTTP headers, AI output schema, or retry
-settings yet, though the API validates and stores them. Docker Compose and
-GitHub CI still need validation in an environment where they are available.
+settings yet, though the API validates and stores them. Docker Compose, Redis,
+and worker readiness subsequently passed the Phase 3 Milestone 1 infrastructure
+gate. Hosted GitHub Actions remains unverified.
 
 ## Phase 3 — Queue and Worker
+
+Progress:
+- Milestone 1 complete: disposable PostgreSQL and Redis health, persistence,
+  application connectivity, worker readiness, and graceful shutdown verified
+- Milestone 2 complete: shared execution snapshot and queue payload contracts,
+  execution tables, and durable queue outbox migration
+- manual trigger endpoint, outbox dispatch, BullMQ production/consumption, and
+  execution state transitions remain pending
 
 Goals:
 - connect the existing Redis client to BullMQ

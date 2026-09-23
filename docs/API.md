@@ -18,8 +18,9 @@ response, for example:
 ```
 
 It does not check database or Redis readiness. Authentication, organizations,
-and workflow configuration endpoints are implemented. Execution, webhook
-intake, tasks, and audit endpoints remain planned contracts.
+and workflow configuration endpoints are implemented. Phase 3 Milestone 2
+adds internal execution and queue payload schemas plus database storage only;
+execution, webhook intake, tasks, and audit endpoints remain planned contracts.
 
 The API may evolve during implementation. Any breaking changes must be reflected in this document.
 
@@ -206,6 +207,11 @@ The web editor currently exposes required action fields. Optional HTTP
 headers, AI output schema, and retry settings are API-only for now.
 
 ## 4. Planned API (not implemented)
+
+The internal workflow execution queue payload is strictly
+`{ "executionId": "<uuid>" }`. Workflow definitions, trigger payloads, and
+step configuration remain in PostgreSQL snapshots and are not copied into the
+queue job. No route creates or dispatches this payload yet.
 
 ### POST `/api/organizations/:organizationId/workflows/:workflowId/test`
 

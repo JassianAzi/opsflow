@@ -5,8 +5,10 @@ This document defines the initial logical database model.
 Phase 1 defines the four authentication and organization tables in
 `apps/api/src/db/schema.ts` with migration
 `apps/api/drizzle/0000_soft_next_avengers.sql`. Phase 2 adds workflows and
-workflow steps in `apps/api/drizzle/0001_previous_amazoness.sql`. Execution,
-tasks, audit, and webhook tables below remain design targets.
+workflow steps in `apps/api/drizzle/0001_previous_amazoness.sql`. Phase 3
+Milestone 2 adds execution history and the durable queue outbox in
+`apps/api/drizzle/0003_chilly_texas_twister.sql`. Tasks, audit, and webhook
+tables below remain design targets.
 
 The exact ORM syntax may change, but the domain model should remain consistent unless the architecture is intentionally revised and documented.
 
@@ -106,6 +108,10 @@ Constraints and behavior:
 - check constraint requires `version >= 1`
 - `created_at` and `updated_at` are `timestamptz`; the API updates the latter
 - index on `(organization_id, updated_at)` supports scoped listing
+- unique `(id, organization_id)` index supports a tenant-consistent composite
+  execution foreign key
+- workflow deletion is restricted after execution history exists; no execution
+  row can be cascaded away by deleting a workflow
 
 ### workflow_steps
 
@@ -146,6 +152,7 @@ Fields:
 - workflow_version
 - trigger_type
 - trigger_payload
+- workflow_snapshot
 - idempotency_key
 - status
 - queued_at
@@ -160,6 +167,20 @@ Statuses:
 - failed
 - cancelled
 
+Constraints and behavior:
+- UUID primary key; organization and workflow references use restrictive
+  deletion
+- composite `(workflow_id, organization_id)` foreign key prevents assigning an
+  execution to a workflow from another tenant
+- `workflow_version` is positive and identifies the captured definition
+- `workflow_snapshot` is JSONB containing the immutable workflow metadata,
+  trigger configuration, and ordered step snapshots
+- `trigger_payload` and `workflow_snapshot` must be JSON objects
+- optional idempotency keys are unique per workflow
+- indexes support organization history, workflow history, and queued status
+  scans
+- started/completed timestamps cannot be reversed
+
 ### execution_steps
 
 Fields:
@@ -167,6 +188,11 @@ Fields:
 - execution_id
 - workflow_step_id
 - step_order
+- step_type
+- action_type
+- name
+- config
+- retry_config
 - status
 - input_data
 - output_data
@@ -182,6 +208,48 @@ Statuses:
 - completed
 - skipped
 - failed
+
+Constraints and behavior:
+- execution foreign key cascades only when an execution record is explicitly
+  removed
+- `workflow_step_id` is immutable provenance and intentionally has no foreign
+  key to `workflow_steps`
+- step type, action type, name, config, retry config, and order are copied from
+  the execution snapshot so later workflow edits or step replacement cannot
+  alter history
+- unique `(execution_id, step_order)` ordering, nonnegative order and attempt
+  count, condition/action consistency, JSON object checks, and timestamp order
+  are enforced
+- index on `(execution_id, status)` supports worker and detail queries
+
+### execution_queue_outbox
+
+Fields:
+- id
+- execution_id
+- job_payload
+- status
+- attempt_count
+- available_at
+- locked_at
+- published_at
+- last_error
+- created_at
+- updated_at
+
+Statuses:
+- pending
+- published
+- failed
+
+Constraints and behavior:
+- one outbox row per execution
+- execution foreign key cascades only when an execution is explicitly removed
+- `job_payload` must equal `{ "executionId": execution_id }`; workflow
+  definitions and trigger data stay in PostgreSQL
+- attempt count is nonnegative and `(status, available_at)` is indexed for a
+  future dispatcher
+- no dispatcher or BullMQ producer is implemented in Milestone 2
 
 ### internal_tasks
 
@@ -273,6 +341,12 @@ only their own fixture rows between tests.
 Phase 2 remediation adds `apps/api/drizzle/0002_sticky_joseph.sql`. Before it
 was applied locally, explicit queries found zero invalid versions, negative
 orders, or inconsistent step/action types in `opsflow_test`.
+
+Phase 3 Milestone 2 adds
+`apps/api/drizzle/0003_chilly_texas_twister.sql` without modifying migrations
+0000–0002. It was applied from scratch to a disposable PostgreSQL 16
+`opsflow_test` database before database-backed tests ran; the disposable
+container was then removed.
 
 ## 5. Seed Data
 

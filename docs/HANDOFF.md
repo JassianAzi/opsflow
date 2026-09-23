@@ -6,7 +6,105 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 2 Remediation
+## Current State — Phase 3 Milestone 1 Infrastructure Gate
+
+### Milestone and Status
+
+Phase 3 Milestone 1 is **complete**. A normal Windows PowerShell 5.1 session
+with Docker Desktop access ran `scripts/verify-infrastructure-gate.ps1` to
+completion and ended with
+`PHASE 3 MILESTONE 1 INFRASTRUCTURE GATE: PASSED`. PostgreSQL and Redis health,
+application connectivity, worker readiness, graceful shutdown, and persistence
+through service recreation were all demonstrated with a uniquely named
+disposable Compose project. The script removed its containers, network, named
+volumes, temporary worker image, and temporary build context after the run.
+Existing Docker resources and the unrelated PostgreSQL listener on port 5432
+were not touched.
+
+This milestone added no execution schema, migration, API route, BullMQ job, or
+workflow behavior. Phase 2 remediation remains committed as
+`3a28d6b fix: harden phase 2 workflow editing`.
+
+### Implementation and Gate Design
+
+- Added `scripts/verify-infrastructure-gate.ps1` as a repeatable Windows
+  PowerShell 5.1 compatible gate.
+- The script creates a unique Compose project name and asks Windows for two
+  currently available host ports instead of relying on fixed disposable ports.
+- PostgreSQL 16 Alpine and Redis 7 Alpine start through the existing Compose
+  file and must reach Docker health status `healthy`.
+- `npm.cmd run services:check` must connect to both services before and after
+  service recreation. `npm.cmd` is selected explicitly because the installed
+  Node `npm.ps1` shim accesses `$MyInvocation.Statement`, which is unavailable
+  under Windows PowerShell 5.1 in this invocation mode.
+- The script writes unique PostgreSQL and Redis markers, recreates the service
+  containers without deleting named volumes, and verifies both markers after
+  restart.
+- A temporary Linux worker image is built from the current worker and config
+  packages. The worker must log readiness, accept SIGTERM, and exit with code
+  0 within ten seconds.
+- Resource ownership is scoped to the unique project and temporary worker
+  names. Final cleanup is guarded so it runs once, ignores only harmless
+  already-absent resources, preserves the primary failure, and restores the
+  caller's environment and working directory.
+- Failure diagnostics print the exception position and PowerShell script stack
+  before cleanup. Native stdout and stderr are captured with
+  `ErrorActionPreference=Continue`; the native exit code alone determines
+  command success.
+
+### Commands and Results
+
+- External gate command:
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+  .\scripts\verify-infrastructure-gate.ps1`: passed and printed the final gate
+  success marker.
+- Docker Compose configuration and startup: passed with dynamically selected
+  disposable PostgreSQL and Redis host ports.
+- PostgreSQL container health and `pg_isready`: passed.
+- Redis container health and `redis-cli PING`: passed with `PONG`.
+- First `npm.cmd run services:check`: passed with `PostgreSQL: connected` and
+  `Redis: connected`.
+- PostgreSQL and Redis persistence marker writes: passed.
+- Compose `down` without `--volumes`, followed by `up --wait`: passed; both
+  unique persistence markers survived container recreation.
+- Second `npm.cmd run services:check`: passed after restart.
+- Worker readiness: passed after the expected ready log.
+- Worker `docker stop --signal SIGTERM --time 10`: passed; the container exit
+  code was 0.
+- Final disposable cleanup: passed; the gate removed its project containers,
+  network, named volumes, worker container/image, and temporary build context.
+- Windows PowerShell `5.1.26100.9444` parser check: passed.
+- The exact native wrapper was tested under Windows PowerShell 5.1 with actual
+  `npm.cmd --version` (exit 0) and a missing npm script (stderr plus exit 1):
+  passed without the `npm.ps1` `Statement` error.
+- Earlier sandbox attempts that could not access Docker Desktop remain useful
+  environment history only; the successful external run supersedes them for
+  Milestone 1 readiness.
+
+### Files Changed
+
+- `scripts/verify-infrastructure-gate.ps1`
+- `docs/CHANGELOG.md`
+- `docs/HANDOFF.md`
+
+No application source, package dependency, Compose definition, environment
+schema, database schema, or migration was changed.
+
+### Remaining Limits and Next Action
+
+- Hosted GitHub Actions remains unverified because no remote or hosted run is
+  available. This is separate from the locally passed infrastructure gate.
+- The optional concurrent PATCH interleaving and rendered dirty-navigation
+  tests remain deferred. The existing membership-revocation timing window
+  remains tracked.
+- The infrastructure gate is ready for Phase 3 Milestone 2: add shared
+  execution contracts and durable PostgreSQL execution/outbox tables without
+  adding an API trigger, BullMQ dispatch, worker consumption, or step
+  execution.
+
+---
+
+## Previous State — Phase 2 Remediation
 
 ### Milestone and Status
 

@@ -6,6 +6,17 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 3 — Milestone 1 Infrastructure Gate
+
+- statically verified the existing PostgreSQL and Redis Compose definitions, configurable host ports, health checks, and persistent volumes
+- added a Windows PowerShell 5.1 compatible disposable infrastructure gate with dynamically selected host ports, unique Compose resource names, single-pass cleanup, and failure diagnostics
+- verified PostgreSQL and Redis health plus `services:check` before and after a clean container recreation
+- verified PostgreSQL and Redis marker persistence through the volume-backed restart
+- verified worker Redis readiness and graceful SIGTERM shutdown with exit code 0
+- verified that the gate removed only its disposable containers, network, volumes, worker image, and temporary build context
+- selected `npm.cmd` explicitly to avoid the installed `npm.ps1` shim's unsupported `InvocationInfo.Statement` access on Windows PowerShell 5.1
+- recorded hosted GitHub Actions as separately unverified because no hosted run is available
+
 ### Phase 2 Remediation
 
 - added required `expectedVersion` checks for workflow configuration updates and `409 WORKFLOW_VERSION_CONFLICT` responses that preserve newer definitions

@@ -9,9 +9,9 @@ authentication, organization, and workflow management views plus Fastify API
 routes. Phase 3 Milestone 1 verified local PostgreSQL, Redis, and worker
 readiness. Milestone 2 adds immutable execution snapshots, execution step
 state, and a durable queue outbox in PostgreSQL. Milestone 3 adds transactional
-manual test execution creation. No outbox dispatcher, BullMQ producer or
-consumer, execution state processor, or workflow step execution is implemented
-yet.
+manual test execution creation. Milestone 4 adds the worker-side durable
+outbox dispatcher and BullMQ producer. No BullMQ consumer, execution state
+processor, or workflow step execution is implemented yet.
 
 ```text
 Browser
@@ -67,6 +67,8 @@ The API should remain responsive and avoid executing long-running workflow actio
 
 ### `apps/worker`
 Responsibilities:
+- claim committed queue outbox records
+- publish execution IDs to BullMQ
 - consume queued workflow jobs
 - evaluate workflow conditions
 - execute workflow actions
@@ -91,8 +93,8 @@ Contains:
 - shared lint or TypeScript configuration where useful
 
 It also exports a reusable Redis client factory. The API owns its
-Drizzle and node-postgres client in `apps/api/src/db/client.ts`; the worker can
-add database access when execution work begins. Both Node processes validate
+Drizzle and node-postgres client in `apps/api/src/db/client.ts`; the worker uses
+a bounded node-postgres pool for outbox claims. Both Node processes validate
 their required URLs at startup. The API health route is a liveness response and
 does not imply PostgreSQL or Redis readiness; `npm run services:check` tests
 both connections explicitly. API routes call services, which use dedicated
@@ -130,6 +132,15 @@ tenant-scoped workflow, accepts only active manual workflows, builds the
 snapshot on the server, then inserts the execution, copied steps, and outbox
 row atomically. An optional `Idempotency-Key` maps retries to the original
 execution. The route returns after commit and does not require Redis.
+
+The worker runs an outbox dispatcher module. Each dispatcher transaction uses
+`FOR UPDATE SKIP LOCKED` to claim one available row with a UUID lease token, so
+multiple instances can publish different rows safely. It validates the stored
+minimal payload, submits a BullMQ job whose deterministic ID is the execution
+UUID, and marks the row published only after `Queue.add` succeeds. A crash in
+that gap leaves a reclaimable lease; resubmission uses the same job ID and is
+deduplicated by BullMQ. Redis failures release the lease and schedule bounded
+exponential backoff. The worker does not consume the queued job in Milestone 4.
 
 ## 4. Workflow Model
 
@@ -180,8 +191,9 @@ The data model should still allow future branching by keeping steps explicit and
 
 Milestone 2 implements the storage contracts for steps 3 and 8 and the outbox
 needed between steps 3 and 4. Milestone 3 implements atomic execution, copied
-step, and outbox creation for manual tests. Dispatch, job consumption, and
-status transitions remain separate milestones.
+step, and outbox creation for manual tests. Milestone 4 dispatches committed
+outbox rows for step 4. Job consumption and status transitions remain separate
+milestones.
 
 ## 6. Reliability Rules
 
@@ -199,10 +211,11 @@ Retry configuration should include:
 ### Failure Isolation
 A worker crash should not corrupt workflow state.
 
-Execution creation and its queue outbox insert must share one PostgreSQL
-transaction. A later dispatcher may retry unpublished outbox rows. The outbox
-enforces one payload per execution and the payload contains only the execution
-ID. BullMQ delivery and worker processing remain future work.
+Execution creation and its queue outbox insert share one PostgreSQL
+transaction. The dispatcher retries unpublished outbox rows with a finite
+attempt count, a stale-lease timeout, and bounded backoff. The outbox enforces
+one payload per execution and the payload contains only the execution ID.
+BullMQ job consumption and workflow processing remain future work.
 
 ### Observability
 At minimum, record:

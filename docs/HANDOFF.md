@@ -6,7 +6,188 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 3 Milestone 3 Transactional Manual Execution Creation
+## Current State — Phase 3 Milestone 4 Durable Outbox Dispatch
+
+### Milestone and Status
+
+Phase 3 Milestone 4 is **implemented and intentionally uncommitted for
+review**. The worker now claims committed PostgreSQL outbox rows and publishes
+strict `{ executionId }` jobs to BullMQ. It does not consume jobs, change
+execution or step status, evaluate conditions, or perform actions.
+
+The independently reviewed Milestone 3 was validated again and committed
+separately as `da0a0299210f4fd285b5cfa8fb2bf998b24088ff feat: create manual
+workflow executions` before Milestone 4 work began.
+
+### Dispatch and Reliability Design
+
+- The worker verifies PostgreSQL connectivity and the required outbox relation
+  at startup, starts a dedicated outbox dispatcher module, and stops the
+  polling loop, BullMQ queue connection, and PostgreSQL pool on SIGINT or
+  SIGTERM.
+- `PostgresOutboxRepository.claimNext` uses a transaction and `FOR UPDATE SKIP
+  LOCKED` to select one due pending row. The claim records `locked_at`, a random
+  UUID `lock_token`, and increments `attempt_count`. Multiple dispatcher
+  instances can claim different rows without sharing ownership.
+- Claim completion and failure updates require both the row ID and matching
+  lock token. A stale claim becomes eligible after 30 seconds. Claims that
+  crash on their final allowed attempt are changed to `failed` after the lease
+  expires.
+- The dispatcher validates the stored payload with the shared strict
+  `executionQueueJobSchema` and confirms its execution ID matches the outbox
+  row. Invalid persisted payloads fail permanently without reaching Redis.
+- BullMQ receives job name `execute-workflow`, data `{ executionId }`, and the
+  execution UUID as its deterministic job ID. Completed and failed jobs are
+  retained so that this ID remains a deduplication key.
+- The outbox row is marked `published` only after `Queue.add` resolves. A crash
+  after Redis accepts the job but before PostgreSQL updates the row leaves a
+  stale lease; the later retry uses the same job ID, gets BullMQ's duplicate
+  acknowledgement, and safely marks the row published.
+- Redis publication uses a finite request retry and two-second timeout.
+  Failures clear the lease, retain a redacted and truncated error, and advance
+  `available_at` with exponential backoff from one to sixty seconds. Five
+  attempts are allowed by default. Redis unavailability does not stop the
+  worker, so pending work recovers after Redis or the process returns.
+- Queue constants and the job payload schema remain in `packages/shared`.
+  There is no worker consumer in this milestone.
+
+### Database and Migration State
+
+- Added `apps/api/drizzle/0004_mushy_mandarin.sql` and
+  `apps/api/drizzle/meta/0004_snapshot.json`; the migration adds nullable UUID
+  `execution_queue_outbox.lock_token` for claim ownership.
+- Updated the Drizzle journal and current schema. Migrations 0000–0003 were not
+  edited.
+- Migration 0004 was applied successfully after migrations 0000–0003 to a
+  fresh disposable PostgreSQL 16 database named exactly `opsflow_test`.
+
+### Focused Tests
+
+- A single due row produces one BullMQ job with the exact name, deterministic
+  ID, and payload, then records a published outbox row.
+- A simulated crash after queue submission expires its database lease; a new
+  dispatcher submits the same deterministic ID, leaves one waiting job, and
+  marks the row published on its second claim.
+- Two dispatcher instances claim and publish four rows concurrently with one
+  attempt and one job per execution.
+- An unavailable Redis endpoint leaves a row pending with redacted error and
+  backoff; a new dispatcher publishes it after Redis recovery.
+- Repeated publication failure reaches the bounded attempt count and records a
+  failed row.
+- The polling dispatcher starts, publishes pending work, and stops cleanly.
+
+### Files Changed in Milestone 4
+
+Added:
+
+- `apps/api/drizzle/0004_mushy_mandarin.sql`
+- `apps/api/drizzle/meta/0004_snapshot.json`
+- `apps/worker/src/outbox/dispatcher.ts`
+- `apps/worker/src/outbox/publisher.ts`
+- `apps/worker/src/outbox/repository.ts`
+- `apps/worker/src/outbox.integration.test.ts`
+
+Modified:
+
+- `.github/workflows/ci.yml`
+- `apps/api/drizzle/meta/_journal.json`
+- `apps/api/src/db/schema.ts`
+- `apps/worker/package.json`
+- `apps/worker/src/index.ts`
+- `apps/worker/tsconfig.json`
+- `package-lock.json`
+- `package.json`
+- `packages/shared/src/executions.ts`
+- `scripts/verify-infrastructure-gate.ps1`
+- `README.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DATABASE.md`
+- `docs/DEVELOPMENT.md`
+- `docs/ROADMAP.md`
+- `docs/CHANGELOG.md`
+- `docs/HANDOFF.md`
+
+### Commands and Results
+
+- Milestone 3 closeout: `npm run lint`, `npm run typecheck`, `npm run
+  format:check`, `npm run build`, Drizzle consistency, migration immutability,
+  and `git diff --check` passed. Fresh disposable PostgreSQL migration and all
+  **46 tests in 7 files** passed before commit
+  `da0a0299210f4fd285b5cfa8fb2bf998b24088ff`.
+- `npm run db:generate`: passed and generated migration 0004 plus its snapshot.
+- Initial `npm run lint`, `npm run typecheck`, and `npm run format:check`:
+  passed.
+- Disposable containers `opsflow-m4-pg-b5df4cf972` and
+  `opsflow-m4-redis-b5df4cf972` reached healthy on dynamic loopback ports 57195
+  and 57196. `npm run db:migrate` applied migrations 0000–0004, and the first
+  integration run passed **51 tests in 8 files**.
+- A first rerun of `scripts/verify-infrastructure-gate.ps1` exposed that the
+  worker logged readiness after a generic database ping and then reported its
+  missing outbox relation in the gate's unmigrated database. Startup now
+  verifies that relation, and the gate now applies committed migrations before
+  launching its Linux worker image.
+- The corrected gate used disposable project
+  `opsflow-m1-6608-b3cdebb1` on dynamic ports 57684 and 57685. PostgreSQL and
+  Redis health, both `services:check` calls, migrations 0000–0004, persistence
+  through restart, worker readiness without a polling error, SIGTERM exit code
+  0, and scoped cleanup all passed.
+- Final `npm run lint`, `npm run typecheck`, `npm run format:check`, and
+  `npm run build`: passed. Vite emitted only its existing nonfatal Zod comment
+  and bundle-size warnings.
+- Final `npm run db:migrate`: passed as an idempotent migration check against
+  the disposable database. Final `npm test` passed **52 tests in 8 files**,
+  including six PostgreSQL-and-Redis dispatcher integration tests.
+- `npm exec --workspace @opsflow/api drizzle-kit check`: passed with
+  `Everything's fine`.
+- `git diff --exit-code HEAD --` for migrations 0000–0003: passed unchanged.
+- `git diff --check`: passed with line-ending notices only.
+- The dedicated Milestone 4 PostgreSQL and Redis containers and the gate's
+  Compose projects, volumes, worker images, and temporary contexts were
+  removed after validation.
+
+### Observability
+
+Pending and terminal dispatch work can be inspected without selecting stored
+payloads:
+
+```sql
+SELECT status, count(*) FROM execution_queue_outbox GROUP BY status;
+SELECT id, execution_id, attempt_count, available_at, last_error
+FROM execution_queue_outbox
+WHERE status IN ('pending', 'failed')
+ORDER BY available_at;
+```
+
+Worker logs contain execution IDs and publish/retry state, but omit payloads,
+Redis URLs, and credentials.
+
+### Known Issues, Limits, and Git State
+
+- No BullMQ consumer or workflow execution behavior exists yet. Waiting jobs
+  intentionally remain in Redis.
+- Queue acknowledgements and PostgreSQL updates cannot be one distributed
+  transaction. Deterministic retained job IDs make the crash gap at-least-once
+  safe for this producer; later consumers must also be idempotent.
+- Hosted GitHub Actions remains unverified. The workflow now provisions Redis
+  for dispatcher integration tests, but no hosted run was available.
+- The optional Phase 2 concurrent PATCH interleaving and rendered dirty-editor
+  tests remain deferred. Existing older routes retain the tracked membership
+  revocation timing window.
+- Milestone 4 changes listed above are the only working-tree changes and must
+  remain uncommitted for independent review. `git status --short` lists only
+  those modified and added files; there are no temporary test artifacts.
+
+### Recommended Next Action
+
+Independently review and commit Milestone 4. Then implement a BullMQ consumer
+as the next isolated milestone: claim one execution by ID, enforce idempotent
+execution state transitions, and prove crash/retry behavior before evaluating
+conditions or actions.
+
+---
+
+## Previous State — Phase 3 Milestone 3 Transactional Manual Execution Creation
 
 ### Milestone and Status
 

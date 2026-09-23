@@ -7,8 +7,9 @@ Phase 1 defines the four authentication and organization tables in
 `apps/api/drizzle/0000_soft_next_avengers.sql`. Phase 2 adds workflows and
 workflow steps in `apps/api/drizzle/0001_previous_amazoness.sql`. Phase 3
 Milestone 2 adds execution history and the durable queue outbox in
-`apps/api/drizzle/0003_chilly_texas_twister.sql`. Tasks, audit, and webhook
-tables below remain design targets.
+`apps/api/drizzle/0003_chilly_texas_twister.sql`. Milestone 4 adds dispatcher
+lease ownership in `apps/api/drizzle/0004_mushy_mandarin.sql`. Tasks, audit,
+and webhook tables below remain design targets.
 
 The exact ORM syntax may change, but the domain model should remain consistent unless the architecture is intentionally revised and documented.
 
@@ -232,6 +233,7 @@ Fields:
 - attempt_count
 - available_at
 - locked_at
+- lock_token
 - published_at
 - last_error
 - created_at
@@ -247,9 +249,15 @@ Constraints and behavior:
 - execution foreign key cascades only when an execution is explicitly removed
 - `job_payload` must equal `{ "executionId": execution_id }`; workflow
   definitions and trigger data stay in PostgreSQL
-- attempt count is nonnegative and `(status, available_at)` is indexed for a
-  future dispatcher
-- no dispatcher or BullMQ producer is implemented in Milestone 2
+- attempt count is nonnegative and `(status, available_at)` is indexed for the
+  dispatcher
+- the dispatcher claims available rows with `FOR UPDATE SKIP LOCKED`, records a
+  UUID `lock_token`, and accepts completion or failure updates only from that
+  claim owner
+- publication failures retain a redacted `last_error` and advance
+  `available_at`; bounded attempts end in `failed`
+- `published_at` is set only after BullMQ acknowledges the deterministic
+  execution-ID job
 
 ### internal_tasks
 

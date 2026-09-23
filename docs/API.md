@@ -229,7 +229,8 @@ executions. A replay still requires current organization membership.
 
 Inactive or draft workflows return `409 WORKFLOW_NOT_ACTIVE`. Active webhook
 or schedule workflows return `409 WORKFLOW_TRIGGER_NOT_MANUAL`. The route does
-not contact Redis, publish a BullMQ job, or execute any step.
+not contact Redis or execute any step. The separate worker dispatcher later
+publishes committed pending outbox rows to BullMQ.
 
 ## 4. Planned API (not implemented)
 
@@ -237,7 +238,9 @@ The internal workflow execution queue payload is strictly
 `{ "executionId": "<uuid>" }`. Workflow definitions, trigger payloads, and
 step configuration remain in PostgreSQL snapshots and are not copied into the
 queue job. The manual test route stores this payload in the PostgreSQL outbox;
-no route or background process dispatches it yet.
+the worker dispatcher validates and publishes it with the execution UUID as
+the BullMQ job ID. No API route dispatches directly, and no consumer is
+implemented yet.
 
 ## 5. Executions
 

@@ -84,8 +84,9 @@ Progress:
   execution tables, and durable queue outbox migration
 - Milestone 3 complete: authenticated manual test execution creation atomically
   stores the execution snapshot, copied steps, and pending outbox row
-- outbox dispatch, BullMQ production/consumption, and execution state
-  transitions remain pending
+- Milestone 4 implemented: durable outbox claims, bounded retry/backoff, and
+  deterministic BullMQ production (pending review and commit)
+- BullMQ consumption and execution state transitions remain pending
 
 Goals:
 - connect the existing Redis client to BullMQ

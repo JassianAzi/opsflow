@@ -18,7 +18,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
-    "test": "npm run build:packages && vitest run",
+    "test": "npm run build:packages && vitest run --no-file-parallelism",
     "db:generate": "npm run build:packages && npm run db:generate -w @opsflow/api",
     "db:migrate": "npm run build:packages && npm run db:migrate -w @opsflow/api",
     "services:check": "npm run build:packages && npm run services:check -w @opsflow/api"

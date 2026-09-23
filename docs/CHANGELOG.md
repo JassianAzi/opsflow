@@ -6,6 +6,17 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 3 — Milestone 4 Durable Outbox Dispatch
+
+- added a worker-side PostgreSQL outbox dispatcher with safe concurrent claims, UUID lease ownership, stale-lease recovery, and bounded retry/backoff
+- added BullMQ production of strict `{ executionId }` jobs using the execution UUID as the deterministic job ID
+- mark outbox rows published only after queue acknowledgement; Redis failures retain pending work and redacted errors until recovery or the attempt limit
+- added migration `0004_mushy_mandarin.sql` for outbox claim tokens without modifying migrations 0000–0003
+- added disposable PostgreSQL and Redis integration coverage for one dispatch, crash-gap duplicate submission, concurrent dispatchers, outage recovery, bounded failure, and clean dispatcher shutdown
+- made worker readiness verify the migrated outbox relation and updated the disposable infrastructure gate to migrate before testing Linux startup and SIGTERM shutdown
+- added Redis to CI services; hosted GitHub Actions remains unverified
+- did not add a BullMQ consumer, execution or step status changes, condition evaluation, or actions
+
 ### Phase 3 — Milestone 3 Transactional Manual Execution Creation
 
 - added an authenticated manual test endpoint that returns HTTP 202 with an execution ID

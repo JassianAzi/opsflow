@@ -58,8 +58,8 @@ The web app is at `http://127.0.0.1:5173`, and the API health check is at
 `http://127.0.0.1:4000/health`. Register, sign in, create an organization, and
 configure workflows in the web app. Activation stores a status change but does
 not run the workflow. The API can create a durable manual test execution and
-outbox record, but it does not dispatch or process that record yet. The worker
-connects to Redis and waits. PostgreSQL uses host port 5433 by default to avoid a local 5432
+outbox record. The worker dispatches committed outbox rows to BullMQ, but no
+consumer processes those jobs yet. PostgreSQL uses host port 5433 by default to avoid a local 5432
 conflict, while its container still uses 5432. The sample password in
 `.env.example` is for local development only. Change `POSTGRES_PASSWORD` and
 the password in `DATABASE_URL` together if you change it.
@@ -86,7 +86,7 @@ Useful root commands: `npm run lint`, `npm run typecheck`, `npm test`,
 
 ### Infrastructure
 - Redis
-- BullMQ (planned for Phase 3)
+- BullMQ
 - Docker
 - Docker Compose
 - GitHub Actions
@@ -158,7 +158,8 @@ Phase 2 workflow CRUD is implemented, including triggers, ordered conditions
 and actions, activation validation, and a workflow editor. Phase 3 now has a
 verified local PostgreSQL/Redis/worker infrastructure gate plus immutable
 execution snapshot, execution step, and durable queue outbox storage contracts.
-An authenticated manual test endpoint now creates all three atomically. No
-queue dispatcher, job consumer, or workflow step execution is implemented yet.
+An authenticated manual test endpoint creates all three atomically, and the
+worker durably dispatches pending outbox rows to BullMQ. No job consumer or
+workflow step execution is implemented yet.
 
 See `docs/ROADMAP.md` for implementation milestones.

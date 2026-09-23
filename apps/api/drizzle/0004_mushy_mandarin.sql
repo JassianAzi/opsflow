@@ -1,0 +1,1 @@
+ALTER TABLE "execution_queue_outbox" ADD COLUMN "lock_token" uuid;

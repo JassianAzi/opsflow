@@ -211,7 +211,7 @@ function Wait-ForWorkerReadiness {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   while ([DateTime]::UtcNow -lt $deadline) {
     $logs = Invoke-NativeCommand -Description 'Worker log inspection' -FilePath 'docker' -ArgumentList @('logs', $workerContainer) -CaptureOutput
-    if ($logs -match 'OpsFlow worker ready; queue processing starts in Phase 3\.') {
+    if ($logs -match 'OpsFlow worker ready; outbox dispatcher started\.') {
       Write-Host 'Worker readiness log observed.'
       return
     }
@@ -327,6 +327,9 @@ try {
   Write-GateStep 'Running the application service connectivity check'
   Invoke-NativeCommand -Description 'npm.cmd services:check' -FilePath 'npm.cmd' -ArgumentList @('run', 'services:check')
 
+  Write-GateStep 'Applying committed migrations to the disposable database'
+  Invoke-NativeCommand -Description 'npm.cmd db:migrate' -FilePath 'npm.cmd' -ArgumentList @('run', 'db:migrate')
+
   Write-GateStep 'Writing PostgreSQL and Redis persistence probes'
   $writeSql = "CREATE TABLE IF NOT EXISTS infrastructure_gate_probe (id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO infrastructure_gate_probe (id, marker) VALUES (1, '$probeMarker') ON CONFLICT (id) DO UPDATE SET marker = EXCLUDED.marker;"
   Invoke-NativeCommand -Description 'PostgreSQL persistence probe write' -FilePath 'docker' -ArgumentList ($composeArguments + @('exec', '--no-TTY', 'postgres', 'psql', '--username', 'opsflow', '--dbname', 'opsflow', '--set', 'ON_ERROR_STOP=1', '--command', $writeSql))
@@ -372,18 +375,20 @@ try {
       'packages/config/tsconfig.json',
       'packages/config/tsconfig.base.json',
       'packages/shared/package.json'
+      'packages/shared/tsconfig.json'
     )) {
     Copy-GateFile -RelativePath $relativePath
   }
   Copy-Item -LiteralPath (Join-Path $repoRoot 'apps/worker/src') -Destination (Join-Path $workerContext 'apps/worker/src') -Recurse -Force
   Copy-Item -LiteralPath (Join-Path $repoRoot 'packages/config/src') -Destination (Join-Path $workerContext 'packages/config/src') -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $repoRoot 'packages/shared/src') -Destination (Join-Path $workerContext 'packages/shared/src') -Recurse -Force
 
   $dockerfile = @'
 FROM node:22-alpine
 WORKDIR /app
 COPY . .
 RUN npm ci --ignore-scripts
-RUN npm run build -w @opsflow/config && npm run build -w @opsflow/worker
+RUN npm run build -w @opsflow/shared && npm run build -w @opsflow/config && npm run build -w @opsflow/worker
 WORKDIR /app/apps/worker
 CMD ["node", "dist/index.js"]
 '@
@@ -423,7 +428,7 @@ CMD ["node", "dist/index.js"]
   Wait-ForWorkerReadiness -TimeoutSeconds 30
 
   Write-GateStep 'Sending SIGTERM and verifying graceful worker shutdown'
-  Invoke-NativeCommand -Description 'Graceful worker stop' -FilePath 'docker' -ArgumentList @('stop', '--signal', 'SIGTERM', '--time', '10', $workerContainer)
+  Invoke-NativeCommand -Description 'Graceful worker stop' -FilePath 'docker' -ArgumentList @('stop', '--signal', 'SIGTERM', '--timeout', '10', $workerContainer)
   $workerExitCode = Invoke-NativeCommand -Description 'Worker exit-code inspection' -FilePath 'docker' -ArgumentList @('inspect', '--format', '{{.State.ExitCode}}', $workerContainer) -CaptureOutput
   if ($workerExitCode -ne '0') {
     $workerLogs = Invoke-NativeCommand -Description 'Worker log inspection' -FilePath 'docker' -ArgumentList @('logs', $workerContainer) -CaptureOutput

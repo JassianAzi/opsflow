@@ -6,6 +6,9 @@ import {
   workflowStepInputSchema,
 } from './workflows.js';
 
+export const EXECUTION_QUEUE_NAME = 'opsflow-executions';
+export const EXECUTION_JOB_NAME = 'execute-workflow';
+
 export const executionStatusSchema = z.enum([
   'queued',
   'running',

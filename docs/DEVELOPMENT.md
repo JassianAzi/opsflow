@@ -39,8 +39,10 @@ Application processes:
 - API
 - worker
 
-The worker checks Redis on startup and stays connected. It does not process
-jobs yet. PostgreSQL and Redis must be running before `npm run dev`. Docker
+The worker verifies PostgreSQL on startup and runs the durable outbox
+dispatcher. Redis may be temporarily unavailable: publication failures remain
+pending with bounded backoff. The worker does not consume jobs yet. PostgreSQL
+and Redis must be running for the complete local flow. Docker
 PostgreSQL uses host port 5433 by default, with internal port 5432. The host
 ports can be changed through `POSTGRES_PORT` and `REDIS_PORT`; update
 `DATABASE_URL` and `REDIS_URL` to match. An existing `.env` from Phase 0 may
@@ -124,8 +126,29 @@ Docker is optional for code changes and unit checks. If a local PostgreSQL
 server is available, point `DATABASE_URL` at a dedicated OpsFlow database and
 run `npm run db:migrate`. Start the API and web separately with
 `npm run build:packages`, `npm run dev -w @opsflow/api`, and
-`npm run dev -w @opsflow/web`. The worker needs Redis and will exit clearly
-when Redis is unavailable.
+`npm run dev -w @opsflow/web`. The worker requires PostgreSQL to start. It
+remains running through a Redis outage so pending outbox work can recover when
+Redis returns.
+
+Dispatcher integration tests require both `TEST_DATABASE_URL` and
+`TEST_REDIS_URL`. The database URL is still guarded to the exact database name
+`opsflow_test`. Tests use a unique BullMQ queue and remove its keys afterward:
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql://opsflow_test:test_only@127.0.0.1:5433/opsflow_test'
+$env:TEST_REDIS_URL='redis://127.0.0.1:6379'
+npm test
+```
+
+To inspect dispatch state locally without exposing job payloads:
+
+```sql
+SELECT status, count(*) FROM execution_queue_outbox GROUP BY status;
+SELECT id, execution_id, attempt_count, available_at, last_error
+FROM execution_queue_outbox
+WHERE status IN ('pending', 'failed')
+ORDER BY available_at;
+```
 
 npm workspaces was chosen because it ships with npm and needs no additional
 workspace manager. `packages/shared` and `packages/config` compile before the

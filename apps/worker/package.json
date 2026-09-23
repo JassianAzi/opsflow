@@ -10,6 +10,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@opsflow/config": "0.1.0"
+    "@opsflow/config": "0.1.0",
+    "@opsflow/shared": "0.1.0",
+    "bullmq": "6.3.8",
+    "ioredis": "5.11.1",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "drizzle-orm": "0.45.2"
   }
 }

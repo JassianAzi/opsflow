@@ -363,6 +363,7 @@ export const executionQueueOutbox = pgTable(
       .notNull()
       .defaultNow(),
     lockedAt: timestamp('locked_at', { withTimezone: true }),
+    lockToken: uuid('lock_token'),
     publishedAt: timestamp('published_at', { withTimezone: true }),
     lastError: text('last_error'),
     createdAt: timestamp('created_at', { withTimezone: true })

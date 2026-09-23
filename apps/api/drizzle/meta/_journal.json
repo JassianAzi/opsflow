@@ -15,6 +15,13 @@
       "when": 1789911980588,
       "tag": "0001_previous_amazoness",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790148303348,
+      "tag": "0002_sticky_joseph",
+      "breakpoints": true
     }
   ]
 }

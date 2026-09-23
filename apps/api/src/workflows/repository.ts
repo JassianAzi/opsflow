@@ -100,6 +100,12 @@ export function createWorkflowRepository(db: Database) {
           .for('update')
           .limit(1);
         if (!current) return null;
+        if (current.version !== input.expectedVersion) {
+          return {
+            status: 'version-conflict' as const,
+            currentVersion: current.version,
+          };
+        }
         const currentSteps = await tx
           .select()
           .from(workflowSteps)
@@ -146,7 +152,11 @@ export function createWorkflowRepository(db: Database) {
           next.triggerConfig,
           newSteps,
         ]);
-        if (oldConfig === newConfig) return { ...current, steps: currentSteps };
+        if (oldConfig === newConfig)
+          return {
+            status: 'success' as const,
+            workflow: { ...current, steps: currentSteps },
+          };
         const [updated] = await tx
           .update(workflows)
           .set({
@@ -188,7 +198,10 @@ export function createWorkflowRepository(db: Database) {
             : [];
           steps.sort((a, b) => a.stepOrder - b.stepOrder);
         }
-        return { ...updated, steps };
+        return {
+          status: 'success' as const,
+          workflow: { ...updated, steps },
+        };
       });
     },
     async setStatus(

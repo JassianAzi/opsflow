@@ -106,6 +106,12 @@ endpoint; the API validates and replaces the step set in a transaction.
 Workflow steps are configuration only. They do not call providers, enqueue
 work, or create execution records.
 
+Configuration PATCH requests include the version the editor loaded. The
+repository locks the workflow row, compares that expected version, and returns
+HTTP 409 rather than overwriting a newer definition. The editor compares its
+draft with the loaded definition, blocks activation until changes are saved,
+and confirms before actions that discard an unsaved draft.
+
 ## 4. Workflow Model
 
 A workflow consists of:

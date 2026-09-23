@@ -1,10 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import {
   createWorkflowInputSchema,
+  updateWorkflowInputSchema,
   workflowStepInputSchema,
 } from './workflows.js';
 
 describe('workflow configuration contracts', () => {
+  it('requires a positive expected version for workflow updates', () => {
+    expect(
+      updateWorkflowInputSchema.safeParse({
+        expectedVersion: 2,
+        name: 'Updated',
+      }).success,
+    ).toBe(true);
+    expect(
+      updateWorkflowInputSchema.safeParse({ name: 'Updated' }).success,
+    ).toBe(false);
+    expect(
+      updateWorkflowInputSchema.safeParse({
+        expectedVersion: 0,
+        name: 'Updated',
+      }).success,
+    ).toBe(false);
+    expect(
+      updateWorkflowInputSchema.safeParse({ expectedVersion: 1 }).success,
+    ).toBe(false);
+  });
+
   it('accepts an incomplete schedule draft but rejects malformed cron and unknown trigger configuration', () => {
     expect(
       createWorkflowInputSchema.safeParse({

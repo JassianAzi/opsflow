@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type {
   OrganizationMember,
   OrganizationSummary,
@@ -6,6 +6,7 @@ import type {
 } from '@opsflow/shared';
 import { api } from './api';
 import { WorkflowWorkspace } from './WorkflowWorkspace';
+import { confirmDiscardChanges } from './workflow-editor';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The request failed.';
@@ -24,6 +25,23 @@ export function App() {
   const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [workflowDraft, setWorkflowDraft] = useState<{
+    dirty: boolean;
+    name: string;
+  }>({ dirty: false, name: '' });
+  const handleWorkflowDirtyChange = useCallback(
+    (dirty: boolean, name = '') => setWorkflowDraft({ dirty, name }),
+    [],
+  );
+
+  function allowWorkflowDiscard(action: string): boolean {
+    return confirmDiscardChanges(
+      workflowDraft.dirty,
+      workflowDraft.name || 'the open workflow',
+      action,
+      (prompt) => window.confirm(prompt),
+    );
+  }
 
   useEffect(() => {
     void api
@@ -63,6 +81,7 @@ export function App() {
   }
 
   async function logout() {
+    if (!allowWorkflowDiscard('Sign out?')) return;
     setBusy(true);
     setMessage('');
     try {
@@ -78,7 +97,13 @@ export function App() {
     }
   }
 
-  async function openOrganization(id: string) {
+  async function openOrganization(id: string, discardApproved = false) {
+    if (
+      !discardApproved &&
+      selected?.id !== id &&
+      !allowWorkflowDiscard('Switch organizations?')
+    )
+      return;
     setMessage('');
     try {
       const [{ organization }, { members }] = await Promise.all([
@@ -94,13 +119,14 @@ export function App() {
 
   async function createOrganization(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!allowWorkflowDiscard('Create and open another organization?')) return;
     setBusy(true);
     setMessage('');
     try {
       const { organization } = await api.createOrganization(organizationName);
       setOrganizations((current) => [...current, organization]);
       setOrganizationName('');
-      await openOrganization(organization.id);
+      await openOrganization(organization.id, true);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -240,6 +266,7 @@ export function App() {
                 <WorkflowWorkspace
                   key={selected.id}
                   organizationId={selected.id}
+                  onDirtyChange={handleWorkflowDirtyChange}
                 />
               </div>
             )}

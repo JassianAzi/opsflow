@@ -10,6 +10,7 @@ import {
   sessions,
   users,
   workflowSteps,
+  workflows,
 } from './db/schema.js';
 
 const password = 'correct horse battery staple';
@@ -381,7 +382,11 @@ databaseDescribe(
         method: 'PATCH',
         url: base,
         headers: { cookie: alice },
-        payload: { name: 'Updated', description: 'A useful description' },
+        payload: {
+          expectedVersion: 1,
+          name: 'Updated',
+          description: 'A useful description',
+        },
       });
       expect(changed.json().workflow).toMatchObject({
         name: 'Updated',
@@ -392,7 +397,7 @@ databaseDescribe(
         method: 'PATCH',
         url: base,
         headers: { cookie: alice },
-        payload: { name: 'Updated' },
+        payload: { expectedVersion: 2, name: 'Updated' },
       });
       expect(same.json().workflow.version).toBe(2);
       const list = await app.inject({
@@ -450,7 +455,7 @@ databaseDescribe(
             method: 'PATCH',
             url: `/api/organizations/${orgA}/workflows/${id}`,
             headers: { cookie: bob },
-            payload: { name: 'Edited by member' },
+            payload: { expectedVersion: 1, name: 'Edited by member' },
           })
         ).statusCode,
       ).toBe(200);
@@ -459,7 +464,9 @@ databaseDescribe(
           method,
           url: `/api/organizations/${orgB}/workflows/${id}`,
           headers: { cookie: bob },
-          ...(method === 'PATCH' ? { payload: { name: 'No' } } : {}),
+          ...(method === 'PATCH'
+            ? { payload: { expectedVersion: 1, name: 'No' } }
+            : {}),
         });
         expect(result.statusCode).toBe(404);
       }
@@ -472,6 +479,23 @@ databaseDescribe(
           })
         ).statusCode,
       ).toBe(404);
+      for (const action of ['activate', 'deactivate']) {
+        const crossOrganization = await app.inject({
+          method: 'POST',
+          url: `/api/organizations/${orgB}/workflows/${id}/${action}`,
+          headers: { cookie: charlie },
+        });
+        expect(crossOrganization.statusCode).toBe(404);
+        expect(crossOrganization.json().error.code).toBe('WORKFLOW_NOT_FOUND');
+
+        const nonMember = await app.inject({
+          method: 'POST',
+          url: `/api/organizations/${orgB}/workflows/${id}/${action}`,
+          headers: { cookie: bob },
+        });
+        expect(nonMember.statusCode).toBe(404);
+        expect(nonMember.json().error.code).toBe('ORGANIZATION_NOT_FOUND');
+      }
       expect(
         (
           await app.inject({
@@ -557,7 +581,7 @@ databaseDescribe(
           method: 'PATCH',
           url,
           headers: { cookie: alice },
-          payload: { steps },
+          payload: { expectedVersion: 1, steps },
         });
         expect(response.statusCode).toBe(400);
         expect(response.json().error.code).toBe('VALIDATION_ERROR');
@@ -617,7 +641,7 @@ databaseDescribe(
         method: 'PATCH',
         url,
         headers: { cookie: alice },
-        payload: { steps: [steps[1], steps[0]] },
+        payload: { expectedVersion: 1, steps: [steps[1], steps[0]] },
       });
       expect(unordered.statusCode).toBe(400);
       const saved = await app.inject({
@@ -625,6 +649,7 @@ databaseDescribe(
         url,
         headers: { cookie: alice },
         payload: {
+          expectedVersion: 1,
           triggerConfig: { cron: '0 9 * * 1-5', timezone: 'UTC' },
           steps,
         },
@@ -653,7 +678,11 @@ databaseDescribe(
         method: 'PATCH',
         url,
         headers: { cookie: alice },
-        payload: { description: 'Ready to activate', steps },
+        payload: {
+          expectedVersion: 2,
+          description: 'Ready to activate',
+          steps,
+        },
       });
       expect(metadataOnly.statusCode).toBe(200);
       expect(metadataOnly.json().workflow.version).toBe(3);
@@ -674,7 +703,7 @@ databaseDescribe(
         method: 'PATCH',
         url,
         headers: { cookie: alice },
-        payload: { steps: [] },
+        payload: { expectedVersion: 3, steps: [] },
       });
       expect(invalidWhileActive.statusCode).toBe(400);
       const inactive = await app.inject({
@@ -683,6 +712,106 @@ databaseDescribe(
         headers: { cookie: alice },
       });
       expect(inactive.json().workflow.status).toBe('inactive');
+      expect(inactive.json().workflow.version).toBe(3);
+    });
+
+    it('rejects a stale workflow update without overwriting the newer definition', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = (await createWorkflow(organizationId, alice)).json()
+        .workflow;
+      const url = `/api/organizations/${organizationId}/workflows/${workflow.id}`;
+
+      const first = await app.inject({
+        method: 'PATCH',
+        url,
+        headers: { cookie: alice },
+        payload: { expectedVersion: 1, name: 'Newer name' },
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.json().workflow).toMatchObject({
+        name: 'Newer name',
+        version: 2,
+      });
+
+      const stale = await app.inject({
+        method: 'PATCH',
+        url,
+        headers: { cookie: alice },
+        payload: { expectedVersion: 1, description: 'Stale description' },
+      });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toEqual({
+        error: {
+          code: 'WORKFLOW_VERSION_CONFLICT',
+          message:
+            'This workflow changed after you opened it. Reload version 2 before saving.',
+        },
+      });
+
+      const persisted = await app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: alice },
+      });
+      expect(persisted.json().workflow).toMatchObject({
+        name: 'Newer name',
+        description: '',
+        version: 2,
+      });
+
+      const current = await app.inject({
+        method: 'PATCH',
+        url,
+        headers: { cookie: alice },
+        payload: { expectedVersion: 2, description: 'Current description' },
+      });
+      expect(current.statusCode).toBe(200);
+      expect(current.json().workflow).toMatchObject({
+        description: 'Current description',
+        version: 3,
+      });
+    });
+
+    it('enforces workflow integrity constraints in PostgreSQL', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflowId = (await createWorkflow(organizationId, alice)).json()
+        .workflow.id as string;
+
+      await expect(
+        database.db
+          .update(workflows)
+          .set({ version: 0 })
+          .where(sql`${workflows.id} = ${workflowId}`),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(workflowSteps).values({
+          workflowId,
+          stepOrder: -1,
+          stepType: 'action',
+          actionType: 'log',
+          name: 'Negative order',
+          config: { message: 'No' },
+        }),
+      ).rejects.toThrow();
+      await expect(
+        database.db.insert(workflowSteps).values({
+          workflowId,
+          stepOrder: 0,
+          stepType: 'condition',
+          actionType: 'log',
+          name: 'Inconsistent action type',
+          config: {
+            field: 'customer.status',
+            operator: 'exists',
+          },
+        }),
+      ).rejects.toThrow();
     });
   },
 );

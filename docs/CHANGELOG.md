@@ -6,6 +6,14 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 2 Remediation
+
+- added required `expectedVersion` checks for workflow configuration updates and `409 WORKFLOW_VERSION_CONFLICT` responses that preserve newer definitions
+- added editor dirty-state detection, save-before-activate enforcement, discard confirmations, and page-unload protection
+- added PostgreSQL checks for positive workflow versions, nonnegative step order, and condition/action type consistency in migration `0002_sticky_joseph.sql`
+- added focused concurrency, tenant status-action, deactivation version, database constraint, and editor draft-protection tests
+- recorded that the original Phase 2 implementation was committed as `57255fc`
+
 ### Phase 2 — Workflow CRUD
 
 - added Drizzle workflows and workflow steps schema with a versioned migration

@@ -246,6 +246,7 @@ export const createWorkflowInputSchema = z
 
 export const updateWorkflowInputSchema = z
   .object({
+    expectedVersion: z.number().int().min(1),
     name: nonempty.max(120).optional(),
     description: z.string().max(4000).optional(),
     triggerType: triggerTypeSchema.optional(),
@@ -254,8 +255,8 @@ export const updateWorkflowInputSchema = z
   })
   .strict()
   .refine(
-    (input) => Object.keys(input).length > 0,
-    'Provide at least one field.',
+    (input) => Object.keys(input).some((key) => key !== 'expectedVersion'),
+    'Provide at least one workflow field.',
   );
 
 export function validateTrigger(

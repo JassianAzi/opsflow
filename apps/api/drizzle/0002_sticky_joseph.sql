@@ -1,0 +1,3 @@
+ALTER TABLE "workflow_steps" ADD CONSTRAINT "workflow_steps_order_nonnegative" CHECK ("workflow_steps"."step_order" >= 0);--> statement-breakpoint
+ALTER TABLE "workflow_steps" ADD CONSTRAINT "workflow_steps_action_type_consistent" CHECK (("workflow_steps"."step_type" = 'condition' AND "workflow_steps"."action_type" IS NULL) OR ("workflow_steps"."step_type" = 'action' AND "workflow_steps"."action_type" IS NOT NULL));--> statement-breakpoint
+ALTER TABLE "workflows" ADD CONSTRAINT "workflows_version_positive" CHECK ("workflows"."version" >= 1);

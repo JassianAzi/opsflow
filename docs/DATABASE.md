@@ -103,6 +103,7 @@ Constraints and behavior:
 - `trigger_config` is JSONB and defaults to `{}`
 - `version` starts at 1 and increments once per material definition change;
   status changes do not increment it
+- check constraint requires `version >= 1`
 - `created_at` and `updated_at` are `timestamptz`; the API updates the latter
 - index on `(organization_id, updated_at)` supports scoped listing
 
@@ -131,6 +132,8 @@ Constraints and behavior:
 - JSONB `config` and `retry_config` (`{}` default); no execution occurs yet
 - unique `(workflow_id, step_order)` index; the API assigns consecutive
   zero-based positions from an ordered array and requires conditions before actions
+- check constraints require nonnegative ordering and require action types only
+  on action steps
 - the Phase 2 PATCH API replaces step rows in one transaction when the step set
   changes; step IDs can change after an edit
 
@@ -266,6 +269,10 @@ Phase 2 generated migrations with `npm run db:generate` and applied them to a de
 `opsflow_test` database. No seed data exists yet. API integration tests apply
 committed migrations to a dedicated database named `opsflow_test` and clear
 only their own fixture rows between tests.
+
+Phase 2 remediation adds `apps/api/drizzle/0002_sticky_joseph.sql`. Before it
+was applied locally, explicit queries found zero invalid versions, negative
+orders, or inconsistent step/action types in `opsflow_test`.
 
 ## 5. Seed Data
 

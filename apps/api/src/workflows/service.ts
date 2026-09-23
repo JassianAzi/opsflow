@@ -128,7 +128,15 @@ export function createWorkflowService(
           assertValid(candidate, candidate.status === 'active');
         },
       );
-      return detail(required(row));
+      if (!row)
+        throw new ApiError(404, 'WORKFLOW_NOT_FOUND', 'Workflow not found.');
+      if (row.status === 'version-conflict')
+        throw new ApiError(
+          409,
+          'WORKFLOW_VERSION_CONFLICT',
+          `This workflow changed after you opened it. Reload version ${row.currentVersion} before saving.`,
+        );
+      return detail(row.workflow);
     },
     async activate(
       organizationId: string,

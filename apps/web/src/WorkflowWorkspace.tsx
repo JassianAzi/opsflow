@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   ActionType,
   TriggerType,
@@ -13,6 +13,11 @@ import {
   updateWorkflowInputSchema,
 } from '@opsflow/shared';
 import { api } from './api';
+import {
+  activationGuardMessage,
+  confirmDiscardChanges,
+  isWorkflowDraftDirty,
+} from './workflow-editor';
 
 const inputClass =
   'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-cyan-500';
@@ -207,8 +212,10 @@ function StepFields({
 
 export function WorkflowWorkspace({
   organizationId,
+  onDirtyChange,
 }: {
   organizationId: string;
+  onDirtyChange?: (dirty: boolean, workflowName?: string) => void;
 }) {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [selected, setSelected] = useState<WorkflowDetail | null>(null);
@@ -223,6 +230,30 @@ export function WorkflowWorkspace({
   const [newActionType, setNewActionType] = useState<ActionType>('log');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const draft = useMemo(
+    () => ({ name, description, triggerType, triggerConfig, steps }),
+    [name, description, triggerType, triggerConfig, steps],
+  );
+  const dirty = isWorkflowDraftDirty(selected, draft);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty, selected?.name);
+  }, [dirty, onDirtyChange, selected?.name]);
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
+  useEffect(() => {
+    if (!dirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [dirty]);
 
   async function refresh() {
     const result = await api.workflows(organizationId);
@@ -263,6 +294,16 @@ export function WorkflowWorkspace({
   }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (
+      selected &&
+      !confirmDiscardChanges(
+        dirty,
+        selected.name,
+        'Create and open a new workflow?',
+        (prompt) => window.confirm(prompt),
+      )
+    )
+      return;
     await perform(async () => {
       const input = createWorkflowInputSchema.parse({
         name: newName,
@@ -281,6 +322,7 @@ export function WorkflowWorkspace({
     if (!selected) return;
     await perform(async () => {
       const input = updateWorkflowInputSchema.parse({
+        expectedVersion: selected.version,
         name,
         description,
         triggerType,
@@ -324,6 +366,25 @@ export function WorkflowWorkspace({
     });
   }
   async function status(workflow: WorkflowSummary, active: boolean) {
+    const affectsOpenWorkflow = selected?.id === workflow.id;
+    const activationMessage = activationGuardMessage(
+      active && affectsOpenWorkflow && dirty,
+    );
+    if (activationMessage) {
+      setNotice(activationMessage);
+      return;
+    }
+    if (
+      !active &&
+      affectsOpenWorkflow &&
+      !confirmDiscardChanges(
+        dirty,
+        selected.name,
+        'Deactivate this workflow?',
+        (prompt) => window.confirm(prompt),
+      )
+    )
+      return;
     await perform(async () => {
       const result = active
         ? await api.activateWorkflow(organizationId, workflow.id)
@@ -337,7 +398,17 @@ export function WorkflowWorkspace({
     });
   }
   async function remove(workflow: WorkflowSummary) {
-    if (!window.confirm(`Delete “${workflow.name}” permanently?`)) return;
+    const deletingOpenWorkflow = selected?.id === workflow.id;
+    const confirmed = deletingOpenWorkflow
+      ? confirmDiscardChanges(
+          dirty,
+          selected.name,
+          `Delete “${workflow.name}” permanently?`,
+          (prompt) => window.confirm(prompt),
+        ) &&
+        (dirty || window.confirm(`Delete “${workflow.name}” permanently?`))
+      : window.confirm(`Delete “${workflow.name}” permanently?`);
+    if (!confirmed) return;
     await perform(async () => {
       await api.deleteWorkflow(organizationId, workflow.id);
       if (selected?.id === workflow.id) setSelected(null);
@@ -395,14 +466,26 @@ export function WorkflowWorkspace({
             <div>
               <button
                 className="text-left font-medium text-cyan-300 hover:underline"
-                onClick={() =>
+                onClick={() => {
+                  if (
+                    selected &&
+                    !confirmDiscardChanges(
+                      dirty,
+                      selected.name,
+                      selected.id === workflow.id
+                        ? 'Reload this workflow?'
+                        : 'Open another workflow?',
+                      (prompt) => window.confirm(prompt),
+                    )
+                  )
+                    return;
                   void perform(async () => {
                     load(
                       (await api.workflow(organizationId, workflow.id))
                         .workflow,
                     );
-                  })
-                }
+                  });
+                }}
               >
                 {workflow.name}
               </button>
@@ -447,7 +530,18 @@ export function WorkflowWorkspace({
             <button
               type="button"
               className={buttonClass}
-              onClick={() => setSelected(null)}
+              onClick={() => {
+                if (
+                  !confirmDiscardChanges(
+                    dirty,
+                    selected.name,
+                    'Close the editor?',
+                    (prompt) => window.confirm(prompt),
+                  )
+                )
+                  return;
+                setSelected(null);
+              }}
             >
               Close
             </button>

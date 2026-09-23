@@ -115,6 +115,11 @@ the expression in UTC. The editor currently exposes required action fields;
 optional HTTP headers, AI output schema, and retry settings can be sent through
 the API but are not yet editable in the UI.
 
+Workflow configuration saves use optimistic concurrency. The editor sends its
+loaded `version` as `expectedVersion`; a 409 response means another save won
+and the user must reload before applying changes again. Unsaved drafts block
+activation and prompt before navigation or actions that would discard them.
+
 Docker is optional for code changes and unit checks. If a local PostgreSQL
 server is available, point `DATABASE_URL` at a dedicated OpsFlow database and
 run `npm run db:migrate`. Start the API and web separately with

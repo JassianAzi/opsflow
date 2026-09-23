@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   jsonb,
@@ -145,6 +146,7 @@ export const workflows = pgTable(
       .defaultNow(),
   },
   (table) => [
+    check('workflows_version_positive', sql`${table.version} >= 1`),
     index('workflows_organization_updated_idx').on(
       table.organizationId,
       table.updatedAt,
@@ -176,6 +178,11 @@ export const workflowSteps = pgTable(
       .defaultNow(),
   },
   (table) => [
+    check('workflow_steps_order_nonnegative', sql`${table.stepOrder} >= 0`),
+    check(
+      'workflow_steps_action_type_consistent',
+      sql`(${table.stepType} = 'condition' AND ${table.actionType} IS NULL) OR (${table.stepType} = 'action' AND ${table.actionType} IS NOT NULL)`,
+    ),
     uniqueIndex('workflow_steps_workflow_order_unique').on(
       table.workflowId,
       table.stepOrder,

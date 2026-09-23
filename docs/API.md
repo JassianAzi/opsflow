@@ -135,8 +135,12 @@ Returns `{ "workflow": ... }` including ordered `steps`. Steps have `id`,
 
 ### PATCH `/api/organizations/:organizationId/workflows/:workflowId`
 
-Accepts any nonempty subset of `name`, `description`, `triggerType`,
-`triggerConfig`, and `steps`. The `steps` field is the complete ordered step
+Requires `expectedVersion` and accepts any nonempty subset of `name`,
+`description`, `triggerType`, `triggerConfig`, and `steps`. `expectedVersion`
+must equal the version returned when the workflow was loaded. The comparison
+is performed while the workflow row is locked. A stale value returns
+`409 WORKFLOW_VERSION_CONFLICT` without changing the newer definition; clients
+must reload and must not silently retry. The `steps` field is the complete ordered step
 array, not a partial patch. Its position defines `stepOrder` starting at zero.
 Conditions must precede actions. Each element contains `stepType`,
 `actionType` (`null` for conditions), `name`, `config`, and optional
@@ -147,6 +151,7 @@ does not. Active workflows must remain fully valid after an edit.
 
 ```json
 {
+  "expectedVersion": 3,
   "steps": [
     {"stepType":"condition","actionType":null,"name":"Is active","config":{"field":"customer.status","operator":"equals","value":"active"}},
     {"stepType":"action","actionType":"log","name":"Log","config":{"message":"Active customer"}}

@@ -6,7 +6,140 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 2
+## Current State — Phase 2 Remediation
+
+### Milestone and Status
+
+Phase 2 remediation is complete for the requested stale-update, unsaved-draft,
+database-integrity, and focused-test scope. No Phase 3 execution, queue,
+webhook, provider, or worker behavior was added. The original Phase 2 work is
+committed as `57255fc feat: complete phase 2 workflow management`. The
+remediation changes listed below are uncommitted on `main`.
+
+### Implementation Summary
+
+- Workflow configuration PATCH payloads now require `expectedVersion`. The
+  repository compares it with the persisted version inside the existing
+  transaction and `FOR UPDATE` row lock. A mismatch performs no write and
+  returns `409 WORKFLOW_VERSION_CONFLICT` with a reload message. The React
+  editor sends the version from its loaded workflow and never retries a
+  conflict automatically.
+- The editor compares metadata, trigger configuration, and ordered steps with
+  its loaded workflow. It blocks activation while dirty. It describes the
+  unsaved changes that will be lost before workflow reload/switch, editor
+  close, selected-workflow deletion or deactivation, organization switch,
+  creating another organization/workflow, and sign-out. It also registers a
+  browser before-unload warning. Successful saves load the returned version as
+  the new clean baseline.
+- Added database checks for `workflows.version >= 1`, nonnegative
+  `workflow_steps.step_order`, and the condition/action-to-`action_type`
+  relationship. These are in new migration
+  `apps/api/drizzle/0002_sticky_joseph.sql`; applied migrations 0000 and 0001
+  were not edited.
+- Expanded observable API tests for a successful expected-version update,
+  stale conflict and preservation of the newer definition, cross-organization
+  activation/deactivation, status-only version preservation, and database
+  constraints. Browser-independent editor behavior tests exercise dirty
+  comparisons, discard decisions and messages, and activation blocking.
+
+### Migration Preflight and State
+
+- Before applying migration 0002, explicit read-only queries against the
+  dedicated `opsflow_test` database returned zero rows with an invalid version,
+  negative step order, or inconsistent step/action type.
+- `npm run db:migrate` applied 0002 only to
+  `postgresql://opsflow_test@127.0.0.1:55433/opsflow_test`.
+- PostgreSQL reports all three new constraints as validated and records three
+  applied Drizzle migrations. `drizzle-kit check` reports the migration set is
+  consistent. There is no seed data.
+
+### Files Changed in This Remediation
+
+Added:
+
+- `apps/api/drizzle/0002_sticky_joseph.sql`
+- `apps/api/drizzle/meta/0002_snapshot.json`
+- `apps/web/src/workflow-editor.ts`
+- `apps/web/src/workflow-editor.test.ts`
+
+Modified:
+
+- `apps/api/drizzle/meta/_journal.json`
+- `apps/api/src/db/schema.ts`
+- `apps/api/src/phase1.integration.test.ts`
+- `apps/api/src/workflows/repository.ts`
+- `apps/api/src/workflows/service.ts`
+- `apps/web/src/App.tsx`
+- `apps/web/src/WorkflowWorkspace.tsx`
+- `packages/shared/src/workflows.ts`
+- `packages/shared/src/workflows.test.ts`
+- `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`,
+  `docs/DEVELOPMENT.md`, `docs/CHANGELOG.md`, `docs/HANDOFF.md`
+
+### Commands and Results
+
+- Read `docs/HANDOFF.md`, requirements and architecture documentation, the
+  audit report, the Phase 2 commit diff, and current implementation before
+  editing. Initial `git status --short --branch` was clean on `main`; recent
+  history was `57255fc` followed by `0c130c0`.
+- Baseline audit checks: `npm run lint`, `npm run typecheck`, and
+  `npm run format:check` passed. PostgreSQL-backed `npm test` confirmed the
+  reported 24 tests in five files. Baseline `npm run build` passed after an
+  expected sandbox `spawn EPERM` retry with child-process permission.
+- Baseline `npm run services:check` connected to isolated PostgreSQL and then
+  failed because Redis refused `127.0.0.1:6379`. Worker startup loaded config
+  and failed clearly for the same unavailable Redis service. Docker was not
+  found on PATH. These are environment limits, not demonstrated code defects.
+- `npm run db:generate` passed and created `0002_sticky_joseph.sql` plus its
+  snapshot. A diff check confirmed migrations 0000 and 0001 were unchanged.
+- PostgreSQL preflight query: `invalid_versions=0`, `invalid_orders=0`, and
+  `inconsistent_step_types=0` in `opsflow_test`.
+- `$env:DATABASE_URL='postgresql://opsflow_test@127.0.0.1:55433/opsflow_test'; npm run db:migrate`:
+  passed. Constraint catalog query confirmed all three constraints validated.
+- `$env:TEST_DATABASE_URL='postgresql://opsflow_test@127.0.0.1:55433/opsflow_test'; npm test`:
+  **31 tests in 6 files passed** after rerunning with child-process permission;
+  the first sandboxed attempt could not spawn Vitest workers (`EPERM`) and ran
+  no tests.
+- `npm run lint`, `npm run typecheck`, `npm run format:check`: passed.
+- `npm run build`: passed for all packages and applications after rerunning
+  with child-process permission; the first sandboxed Vite attempt could not
+  spawn esbuild (`EPERM`). Vite retained its nonfatal Zod comment and
+  greater-than-500-kB chunk warnings.
+- `npm exec --workspace @opsflow/api drizzle-kit check`:
+  passed with `Everything's fine`.
+- `git diff --check`: passed with Windows LF-to-CRLF notices. The isolated
+  PostgreSQL cluster was stopped after final validation.
+
+### Remaining Findings and Environment Limits
+
+- Membership authorization and workflow data access remain separate queries.
+  Current cross-organization operations are blocked and tested, and there is no
+  membership-removal endpoint, but a future revocation feature should combine
+  membership enforcement with the workflow query/transaction to eliminate the
+  narrow time-of-check/time-of-use window.
+- Editor logic has focused unit coverage but no rendered browser component or
+  end-to-end test harness. Optional HTTP headers, AI output schema, and retry
+  settings remain API-only controls as documented.
+- Docker Compose, Redis readiness, a successful worker-ready state, and hosted
+  GitHub Actions remain unverified. Redis was not running locally. No production
+  or unrelated database was accessed. The unrelated PostgreSQL listener on
+  port 5432 was untouched.
+- The production web build succeeds with a chunk-size warning. Existing
+  Drizzle Kit/esbuild transitive advisories were not changed in this milestone.
+
+### Git State and Recommended Next Action
+
+The original Phase 2 milestone is committed as `57255fc`; all remediation
+changes are currently uncommitted on `main`. Review and commit them as one
+Phase 2 remediation change. Phase 2 is then ready for Phase 3 implementation,
+but Redis/worker readiness must be verified in a Docker-capable environment
+before Phase 3 can be called complete. When Phase 3 begins, preserve the
+expected-version API and design versioned workflow definition snapshots before
+execution records depend on replaceable workflow-step IDs.
+
+---
+
+## Previous State — Phase 2
 
 ### Milestone and Status
 
@@ -504,3 +637,17 @@ remain unavailable for verification here.
 Next:
 Review and commit Phase 2, verify Compose/CI when available, then begin
 Phase 3 with a workflow definition snapshot strategy before execution records.
+
+### Entry 005 — Phase 2 remediation
+
+Agent:
+Codex
+
+Summary:
+Added expected-version conflict protection, dirty-editor safeguards, database
+integrity constraints in migration 0002, and focused API/editor tests. The
+original Phase 2 baseline is commit `57255fc`; remediation remains uncommitted.
+
+Next:
+Review and commit remediation, verify Redis/worker readiness and hosted CI when
+available, then begin Phase 3 without weakening workflow version checks.

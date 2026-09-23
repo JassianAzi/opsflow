@@ -362,6 +362,40 @@ databaseDescribe(
       });
     }
 
+    async function createActiveManualWorkflow(
+      organizationId: string,
+      cookie: string,
+      message = 'Original event',
+    ) {
+      const created = await createWorkflow(organizationId, cookie);
+      const workflowId = created.json().workflow.id as string;
+      const configured = await app.inject({
+        method: 'PATCH',
+        url: `/api/organizations/${organizationId}/workflows/${workflowId}`,
+        headers: { cookie },
+        payload: {
+          expectedVersion: 1,
+          steps: [
+            {
+              stepType: 'action',
+              actionType: 'log',
+              name: 'Record event',
+              config: { message },
+              retryConfig: { maxAttempts: 2 },
+            },
+          ],
+        },
+      });
+      expect(configured.statusCode).toBe(200);
+      const activated = await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationId}/workflows/${workflowId}/activate`,
+        headers: { cookie },
+      });
+      expect(activated.statusCode).toBe(200);
+      return activated.json().workflow;
+    }
+
     it('creates, reads, updates, lists, and deletes a workflow with version tracking', async () => {
       await register('alice@example.com');
       const alice = cookieFrom(await login('alice@example.com'));
@@ -816,6 +850,321 @@ databaseDescribe(
           },
         }),
       ).rejects.toThrow();
+    });
+
+    it('creates a queued manual test execution for an organization member', async () => {
+      await register('alice@example.com');
+      const bobUser = (await register('bob@example.com')).json().user;
+      const alice = cookieFrom(await login('alice@example.com'));
+      const bob = cookieFrom(await login('bob@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      await database.db.insert(organizationMembers).values({
+        organizationId,
+        userId: bobUser.id,
+        role: 'member',
+      });
+      const workflow = await createActiveManualWorkflow(organizationId, alice);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationId}/workflows/${workflow.id}/test`,
+        headers: { cookie: bob },
+      });
+      expect(response.statusCode).toBe(202);
+      expect(response.json().executionId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+
+      const executionId = response.json().executionId as string;
+      const [execution] = await database.db
+        .select()
+        .from(workflowExecutions)
+        .where(eq(workflowExecutions.id, executionId));
+      const persistedSteps = await database.db
+        .select()
+        .from(executionSteps)
+        .where(eq(executionSteps.executionId, executionId));
+      const [outbox] = await database.db
+        .select()
+        .from(executionQueueOutbox)
+        .where(eq(executionQueueOutbox.executionId, executionId));
+      expect(execution).toMatchObject({
+        organizationId,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        triggerType: 'manual',
+        triggerPayload: {},
+        status: 'queued',
+      });
+      expect(execution.workflowSnapshot).toMatchObject({
+        workflowId: workflow.id,
+        organizationId,
+        workflowVersion: workflow.version,
+        steps: [
+          { name: 'Record event', config: { message: 'Original event' } },
+        ],
+      });
+      expect(persistedSteps).toHaveLength(1);
+      expect(persistedSteps[0]).toMatchObject({
+        name: 'Record event',
+        config: { message: 'Original event' },
+        status: 'pending',
+      });
+      expect(outbox).toMatchObject({
+        jobPayload: { executionId },
+        status: 'pending',
+        attemptCount: 0,
+      });
+    });
+
+    it('rejects unauthorized, inactive, non-manual, and cross-tenant test executions', async () => {
+      await register('alice@example.com');
+      await register('bob@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const bob = cookieFrom(await login('bob@example.com'));
+      const organizationA = (await createOrganization(alice, 'A')).json()
+        .organization.id as string;
+      const organizationB = (await createOrganization(bob, 'B')).json()
+        .organization.id as string;
+      const draft = (await createWorkflow(organizationA, alice)).json()
+        .workflow;
+      const draftUrl = `/api/organizations/${organizationA}/workflows/${draft.id}/test`;
+
+      const unauthenticated = await app.inject({
+        method: 'POST',
+        url: draftUrl,
+      });
+      expect(unauthenticated.statusCode).toBe(401);
+      expect(unauthenticated.json().error.code).toBe('UNAUTHORIZED');
+      const inactive = await app.inject({
+        method: 'POST',
+        url: draftUrl,
+        headers: { cookie: alice },
+      });
+      expect(inactive.statusCode).toBe(409);
+      expect(inactive.json().error.code).toBe('WORKFLOW_NOT_ACTIVE');
+      const nonMember = await app.inject({
+        method: 'POST',
+        url: draftUrl,
+        headers: { cookie: bob },
+      });
+      expect(nonMember.statusCode).toBe(404);
+      expect(nonMember.json().error.code).toBe('ORGANIZATION_NOT_FOUND');
+      const crossTenant = await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationB}/workflows/${draft.id}/test`,
+        headers: { cookie: bob },
+      });
+      expect(crossTenant.statusCode).toBe(404);
+      expect(crossTenant.json().error.code).toBe('WORKFLOW_NOT_FOUND');
+
+      const webhook = (
+        await createWorkflow(organizationA, alice, { triggerType: 'webhook' })
+      ).json().workflow;
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/organizations/${organizationA}/workflows/${webhook.id}`,
+        headers: { cookie: alice },
+        payload: {
+          expectedVersion: 1,
+          steps: [
+            {
+              stepType: 'action',
+              actionType: 'log',
+              name: 'Record webhook',
+              config: { message: 'Received' },
+            },
+          ],
+        },
+      });
+      await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationA}/workflows/${webhook.id}/activate`,
+        headers: { cookie: alice },
+      });
+      const nonManual = await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationA}/workflows/${webhook.id}/test`,
+        headers: { cookie: alice },
+      });
+      expect(nonManual.statusCode).toBe(409);
+      expect(nonManual.json().error.code).toBe('WORKFLOW_TRIGGER_NOT_MANUAL');
+      expect(await database.db.select().from(workflowExecutions)).toHaveLength(
+        0,
+      );
+    });
+
+    it('returns one execution for concurrent idempotent manual test requests', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = await createActiveManualWorkflow(organizationId, alice);
+      const request = () =>
+        app.inject({
+          method: 'POST',
+          url: `/api/organizations/${organizationId}/workflows/${workflow.id}/test`,
+          headers: { cookie: alice, 'idempotency-key': '  retry-1  ' },
+        });
+
+      const [first, replay] = await Promise.all([request(), request()]);
+      expect(first.statusCode).toBe(202);
+      expect(replay.statusCode).toBe(202);
+      expect(replay.json()).toEqual(first.json());
+      expect(
+        await database.db
+          .select()
+          .from(workflowExecutions)
+          .where(eq(workflowExecutions.workflowId, workflow.id)),
+      ).toHaveLength(1);
+      expect(await database.db.select().from(executionSteps)).toHaveLength(1);
+      expect(
+        await database.db.select().from(executionQueueOutbox),
+      ).toHaveLength(1);
+      const [execution] = await database.db.select().from(workflowExecutions);
+      expect(execution.idempotencyKey).toBe('retry-1');
+    });
+
+    it('preserves execution snapshots after the active workflow is edited', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = await createActiveManualWorkflow(organizationId, alice);
+      const created = await app.inject({
+        method: 'POST',
+        url: `/api/organizations/${organizationId}/workflows/${workflow.id}/test`,
+        headers: { cookie: alice },
+      });
+      const executionId = created.json().executionId as string;
+      const [originalStep] = await database.db
+        .select()
+        .from(executionSteps)
+        .where(eq(executionSteps.executionId, executionId));
+
+      const edited = await app.inject({
+        method: 'PATCH',
+        url: `/api/organizations/${organizationId}/workflows/${workflow.id}`,
+        headers: { cookie: alice },
+        payload: {
+          expectedVersion: workflow.version,
+          name: 'Edited workflow',
+          steps: [
+            {
+              stepType: 'action',
+              actionType: 'log',
+              name: 'Changed action',
+              config: { message: 'Changed event' },
+            },
+          ],
+        },
+      });
+      expect(edited.statusCode).toBe(200);
+      expect(edited.json().workflow.version).toBe(workflow.version + 1);
+      expect(edited.json().workflow.steps[0].id).not.toBe(
+        originalStep.workflowStepId,
+      );
+
+      const [execution] = await database.db
+        .select()
+        .from(workflowExecutions)
+        .where(eq(workflowExecutions.id, executionId));
+      const [persistedStep] = await database.db
+        .select()
+        .from(executionSteps)
+        .where(eq(executionSteps.executionId, executionId));
+      expect(execution.workflowVersion).toBe(workflow.version);
+      expect(execution.workflowSnapshot).toMatchObject({
+        name: workflow.name,
+        workflowVersion: workflow.version,
+        steps: [{ config: { message: 'Original event' } }],
+      });
+      expect(persistedStep).toMatchObject({
+        id: originalStep.id,
+        workflowStepId: originalStep.workflowStepId,
+        config: { message: 'Original event' },
+      });
+    });
+
+    it('rolls back execution and step inserts when the outbox insert fails', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = await createActiveManualWorkflow(organizationId, alice);
+      await database.db.execute(
+        sql.raw(
+          `CREATE FUNCTION opsflow_test_reject_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced outbox failure'; END; $$`,
+        ),
+      );
+      await database.db.execute(
+        sql.raw(
+          `CREATE TRIGGER opsflow_test_reject_outbox BEFORE INSERT ON execution_queue_outbox FOR EACH ROW EXECUTE FUNCTION opsflow_test_reject_outbox()`,
+        ),
+      );
+      const response = await (async () => {
+        try {
+          return await app.inject({
+            method: 'POST',
+            url: `/api/organizations/${organizationId}/workflows/${workflow.id}/test`,
+            headers: { cookie: alice },
+          });
+        } finally {
+          await database.db.execute(
+            sql.raw(
+              `DROP TRIGGER IF EXISTS opsflow_test_reject_outbox ON execution_queue_outbox`,
+            ),
+          );
+          await database.db.execute(
+            sql.raw(`DROP FUNCTION IF EXISTS opsflow_test_reject_outbox()`),
+          );
+        }
+      })();
+      expect(response.statusCode).toBe(500);
+      expect(response.json().error.code).toBe('INTERNAL_ERROR');
+      expect(await database.db.select().from(workflowExecutions)).toHaveLength(
+        0,
+      );
+      expect(await database.db.select().from(executionSteps)).toHaveLength(0);
+      expect(
+        await database.db.select().from(executionQueueOutbox),
+      ).toHaveLength(0);
+    });
+
+    it('returns a conflict when deleting a workflow with retained execution history', async () => {
+      await register('alice@example.com');
+      const alice = cookieFrom(await login('alice@example.com'));
+      const organizationId = (await createOrganization(alice, 'Acme')).json()
+        .organization.id as string;
+      const workflow = await createActiveManualWorkflow(organizationId, alice);
+      const url = `/api/organizations/${organizationId}/workflows/${workflow.id}`;
+      const created = await app.inject({
+        method: 'POST',
+        url: `${url}/test`,
+        headers: { cookie: alice },
+      });
+      expect(created.statusCode).toBe(202);
+
+      const removed = await app.inject({
+        method: 'DELETE',
+        url,
+        headers: { cookie: alice },
+      });
+      expect(removed.statusCode).toBe(409);
+      expect(removed.json().error.code).toBe('WORKFLOW_HAS_EXECUTIONS');
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url,
+            headers: { cookie: alice },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(await database.db.select().from(workflowExecutions)).toHaveLength(
+        1,
+      );
     });
 
     it('persists execution and step snapshots independently of mutable workflow steps', async () => {

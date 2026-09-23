@@ -6,7 +6,160 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 3 Milestone 2 Execution Contracts and Migration
+## Current State — Phase 3 Milestone 3 Transactional Manual Execution Creation
+
+### Milestone and Status
+
+Phase 3 Milestone 3 is **complete for transactional manual test execution
+creation**. An authenticated organization member can request a test run for an
+active manual workflow. The API returns HTTP 202 with an execution ID after one
+PostgreSQL transaction commits the server-built workflow snapshot, copied
+execution steps, and one pending queue outbox row.
+
+Milestone 2 was reviewed independently, extended with its requested constraint
+coverage, and committed separately as
+`fe3c2458ae1980d82f0cbfbffa0e8f87ca6d397a feat: add phase 3 execution
+contracts`.
+
+No Redis call, outbox dispatch, BullMQ producer or consumer, worker database
+access, condition evaluation, action execution, or execution status processing
+was added.
+
+### API and Transaction Design
+
+- Added `POST /api/organizations/:organizationId/workflows/:workflowId/test`.
+  It returns `202 { "executionId": "<uuid>" }`.
+- The route uses the existing session guard and parses organization and
+  workflow UUIDs with shared schemas. The optional standard `Idempotency-Key`
+  header is trimmed and limited to 1–200 characters.
+- The repository opens one transaction, locks the requesting user's matching
+  organization membership with `FOR SHARE`, then locks the workflow selected
+  by both workflow and organization ID with `FOR UPDATE`.
+- Only active manual workflows are accepted. The service constructs the
+  snapshot from the locked workflow and its ordered database steps and validates
+  it with `workflowExecutionSnapshotSchema`; client-supplied workflow
+  definitions are never accepted.
+- The transaction inserts the queued `workflow_executions` row, all copied
+  `execution_steps`, and exactly one pending `execution_queue_outbox` row. Any
+  failed insert rolls back all earlier writes.
+- An idempotency key is unique per workflow. Requests for the same workflow and
+  key serialize on the workflow lock; a replay returns HTTP 202 with the
+  original execution ID and creates no duplicate execution, steps, or outbox
+  row. Requests without a key create distinct executions. Current membership
+  is required even for a replay.
+- Draft or inactive workflows return `409 WORKFLOW_NOT_ACTIVE`; active webhook
+  or schedule workflows return `409 WORKFLOW_TRIGGER_NOT_MANUAL`.
+- Workflow deletion now locks the workflow and checks for retained execution
+  history. History returns `409 WORKFLOW_HAS_EXECUTIONS` instead of an
+  unhandled foreign-key error; workflows without history are still hard
+  deleted.
+
+### Database and Migration State
+
+- Milestone 3 adds no migration and does not alter migration files.
+- Migration `0003_chilly_texas_twister.sql` from Milestone 2 remains the latest
+  migration and supplies the execution, copied step, and outbox tables.
+- The manual test repository is the first application writer for those tables.
+  The outbox remains pending until a later dispatcher is implemented.
+
+### Focused Tests
+
+- An organization member receives HTTP 202 and the database contains one
+  queued execution, validated immutable snapshot, pending copied step, and
+  exact `{ executionId }` outbox payload.
+- Requests reject unauthenticated users, non-members, tenant-mismatched workflow
+  IDs, draft workflows, and active non-manual workflows without creating an
+  execution.
+- Two concurrent requests with the same idempotency key return the same
+  execution ID and leave exactly one execution, step set, and outbox row.
+- Editing the active workflow after creation replaces its mutable step while
+  the execution snapshot and copied step retain the original version, step ID,
+  and configuration.
+- A test-only PostgreSQL trigger forces the outbox insert to fail; the API
+  returns its normal internal-error envelope and the transaction leaves zero
+  execution, step, and outbox rows. The trigger and function are removed in a
+  `finally` block.
+- Deleting a workflow after creating an execution returns the documented 409,
+  and both workflow and history remain.
+
+### Files Changed in Milestone 3
+
+Added:
+
+- `apps/api/src/executions/repository.ts`
+- `apps/api/src/executions/routes.ts`
+- `apps/api/src/executions/service.ts`
+
+Modified:
+
+- `apps/api/src/app.ts`
+- `apps/api/src/phase1.integration.test.ts`
+- `apps/api/src/workflows/repository.ts`
+- `apps/api/src/workflows/service.ts`
+- `packages/shared/src/executions.ts`
+- `packages/shared/src/executions.test.ts`
+- `README.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/HANDOFF.md`
+- `docs/ROADMAP.md`
+- `docs/SECURITY.md`
+
+### Commands and Results
+
+- Milestone 2 closeout used disposable PostgreSQL 16 container
+  `opsflow-m2-close-51d473e809` on dynamic host port `61120`.
+  `npm run db:migrate` passed and `npm test` passed **39 tests in 7 files**;
+  cleanup removed the container.
+- Milestone 2 `npm run lint`, `npm run typecheck`, `npm run format:check`,
+  `npm run build`, `npm exec --workspace @opsflow/api drizzle-kit check`, prior
+  migration diff, and `git diff --check`: passed. Commit
+  `fe3c2458ae1980d82f0cbfbffa0e8f87ca6d397a` was created.
+- During Milestone 3, `npx prettier --write` on changed TypeScript files,
+  `npm run lint`, and `npm run typecheck`: passed.
+- First disposable Milestone 3 PostgreSQL run applied migrations 0000–0003 and
+  passed **46 tests in 7 files**; container
+  `opsflow-m3-test-af7c14a815` was removed.
+- Final disposable PostgreSQL 16 run used container
+  `opsflow-m3-final-43e86e7ac3` on dynamic host port `49157`.
+  `npm run db:migrate` passed and `npm test` passed **46 tests in 7 files**,
+  including concurrent idempotency requests; cleanup removed the container.
+- Final `npm run lint`, `npm run typecheck`, `npm run format:check`, and
+  `npm run build`: passed. Vite retained the existing nonfatal Zod annotation
+  and greater-than-500-kB bundle warnings.
+- `npm exec --workspace @opsflow/api drizzle-kit check`: passed with
+  `Everything's fine`.
+- `git diff --exit-code HEAD -- apps/api/drizzle`: passed; Milestone 3 changes
+  no migration.
+- `git diff --check`: passed with line-ending notices only.
+
+### Known Issues, Assumptions, and Git State
+
+- The outbox is durable but has no dispatcher. Rows remain `pending`; no Redis
+  or BullMQ interaction occurs and the worker still only verifies Redis
+  readiness.
+- There is no execution read API or frontend test-run control yet. Those were
+  outside this milestone.
+- Hosted GitHub Actions remains unverified because no hosted run is available.
+- The optional Phase 2 concurrent PATCH interleaving and rendered dirty-editor
+  navigation tests remain deferred. Existing Phase 1 and Phase 2 routes retain
+  the previously tracked membership-revocation timing window; the new manual
+  execution path locks membership within its write transaction.
+- `main` points to Milestone 2 commit
+  `fe3c2458ae1980d82f0cbfbffa0e8f87ca6d397a`. Milestone 3 files listed above
+  are uncommitted and contain the only working-tree changes.
+
+### Recommended Next Action
+
+Review and commit Milestone 3. Then implement the outbox dispatcher as a small
+separate milestone: claim pending outbox rows safely, publish only
+`{ executionId }` to BullMQ after database commit, record publish attempts and
+errors, and prove retry behavior without consuming or executing jobs yet.
+
+---
+
+## Previous State — Phase 3 Milestone 2 Execution Contracts and Migration
 
 ### Milestone and Status
 
@@ -144,10 +297,10 @@ Modified:
 
 ### Git State
 
-`main` points to the Milestone 1 commit
-`8b22d3e5f6ac659bc690b2ebe399a51c70c28b0c`. The Milestone 2 files listed
-above are ready for their separate commit after independent review. No other
-tracked or untracked file is present in the working tree.
+Milestone 2 was committed as
+`fe3c2458ae1980d82f0cbfbffa0e8f87ca6d397a feat: add phase 3 execution
+contracts` after independent review and the focused constraint coverage
+follow-up.
 
 ### Open Issues and Recommended Next Action
 

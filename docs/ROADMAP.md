@@ -82,8 +82,10 @@ Progress:
   application connectivity, worker readiness, and graceful shutdown verified
 - Milestone 2 complete: shared execution snapshot and queue payload contracts,
   execution tables, and durable queue outbox migration
-- manual trigger endpoint, outbox dispatch, BullMQ production/consumption, and
-  execution state transitions remain pending
+- Milestone 3 complete: authenticated manual test execution creation atomically
+  stores the execution snapshot, copied steps, and pending outbox row
+- outbox dispatch, BullMQ production/consumption, and execution state
+  transitions remain pending
 
 Goals:
 - connect the existing Redis client to BullMQ

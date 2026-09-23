@@ -8,9 +8,10 @@ The diagram below is the intended product architecture. Phase 2 contains React
 authentication, organization, and workflow management views plus Fastify API
 routes. Phase 3 Milestone 1 verified local PostgreSQL, Redis, and worker
 readiness. Milestone 2 adds immutable execution snapshots, execution step
-state, and a durable queue outbox in PostgreSQL. No execution API, outbox
-dispatcher, BullMQ producer or consumer, or workflow step execution is
-implemented yet.
+state, and a durable queue outbox in PostgreSQL. Milestone 3 adds transactional
+manual test execution creation. No outbox dispatcher, BullMQ producer or
+consumer, execution state processor, or workflow step execution is implemented
+yet.
 
 ```text
 Browser
@@ -123,6 +124,13 @@ stores that same minimal payload so later dispatch can occur after the
 execution transaction commits without placing a replaceable workflow
 definition in Redis.
 
+The manual test execution route keeps authorization and creation within one
+PostgreSQL transaction. It locks the requesting user's membership and the
+tenant-scoped workflow, accepts only active manual workflows, builds the
+snapshot on the server, then inserts the execution, copied steps, and outbox
+row atomically. An optional `Idempotency-Key` maps retries to the original
+execution. The route returns after commit and does not require Redis.
+
 ## 4. Workflow Model
 
 A workflow consists of:
@@ -170,14 +178,17 @@ The data model should still allow future branching by keeping steps explicit and
 9. The execution is marked completed or failed.
 10. The UI reads the execution state from the API.
 
-Milestone 2 implements only the storage contracts for steps 3 and 8 and the
-outbox needed between steps 3 and 4. Milestone 3 will own atomic execution and
-outbox creation, dispatch, job consumption, and status transitions.
+Milestone 2 implements the storage contracts for steps 3 and 8 and the outbox
+needed between steps 3 and 4. Milestone 3 implements atomic execution, copied
+step, and outbox creation for manual tests. Dispatch, job consumption, and
+status transitions remain separate milestones.
 
 ## 6. Reliability Rules
 
 ### Idempotency
-Webhook executions should support an idempotency key when possible.
+Manual test execution creation accepts an optional `Idempotency-Key` header.
+Keys are unique per workflow, and a replay returns the original execution ID.
+Webhook executions should use the same persisted contract when implemented.
 
 ### Retries
 Retry configuration should include:
@@ -191,7 +202,7 @@ A worker crash should not corrupt workflow state.
 Execution creation and its queue outbox insert must share one PostgreSQL
 transaction. A later dispatcher may retry unpublished outbox rows. The outbox
 enforces one payload per execution and the payload contains only the execution
-ID. BullMQ delivery and worker idempotency remain Milestone 3 work.
+ID. BullMQ delivery and worker processing remain future work.
 
 ### Observability
 At minimum, record:

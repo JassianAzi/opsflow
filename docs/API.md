@@ -18,9 +18,9 @@ response, for example:
 ```
 
 It does not check database or Redis readiness. Authentication, organizations,
-and workflow configuration endpoints are implemented. Phase 3 Milestone 2
-adds internal execution and queue payload schemas plus database storage only;
-execution, webhook intake, tasks, and audit endpoints remain planned contracts.
+workflow configuration, and transactional manual test execution creation are
+implemented. Queue dispatch, execution reads, webhook intake, tasks, and audit
+endpoints remain planned contracts.
 
 The API may evolve during implementation. Any breaking changes must be reflected in this document.
 
@@ -162,8 +162,9 @@ does not. Active workflows must remain fully valid after an edit.
 
 ### DELETE `/api/organizations/:organizationId/workflows/:workflowId`
 
-Hard deletes a workflow and its steps. Returns HTTP 204. Execution history does
-not exist yet. A missing workflow returns 404.
+Hard deletes a workflow and its steps when it has no execution history. Returns
+HTTP 204. A retained execution returns `409 WORKFLOW_HAS_EXECUTIONS` and leaves
+the workflow and history unchanged. A missing workflow returns 404.
 
 ### POST `/api/organizations/:organizationId/workflows/:workflowId/activate`
 
@@ -206,16 +207,37 @@ not increment `version`.
 The web editor currently exposes required action fields. Optional HTTP
 headers, AI output schema, and retry settings are API-only for now.
 
+### POST `/api/organizations/:organizationId/workflows/:workflowId/test`
+
+Creates a queued test execution for an active, valid manual workflow. The
+authenticated user must be an organization member. The API locks the workflow,
+constructs and validates its immutable snapshot, and inserts the execution,
+copied execution steps, and one pending outbox row in a single PostgreSQL
+transaction. It returns HTTP 202:
+
+```json
+{
+  "executionId": "00000000-0000-4000-8000-000000000000"
+}
+```
+
+The optional `Idempotency-Key` request header is trimmed and must contain 1–200
+characters. Repeating a request for the same workflow with the same key returns
+HTTP 202 and the original execution ID without inserting another execution,
+step set, or outbox row. Requests without the header create distinct
+executions. A replay still requires current organization membership.
+
+Inactive or draft workflows return `409 WORKFLOW_NOT_ACTIVE`. Active webhook
+or schedule workflows return `409 WORKFLOW_TRIGGER_NOT_MANUAL`. The route does
+not contact Redis, publish a BullMQ job, or execute any step.
+
 ## 4. Planned API (not implemented)
 
 The internal workflow execution queue payload is strictly
 `{ "executionId": "<uuid>" }`. Workflow definitions, trigger payloads, and
 step configuration remain in PostgreSQL snapshots and are not copied into the
-queue job. No route creates or dispatches this payload yet.
-
-### POST `/api/organizations/:organizationId/workflows/:workflowId/test`
-
-Creates a test execution.
+queue job. The manual test route stores this payload in the PostgreSQL outbox;
+no route or background process dispatches it yet.
 
 ## 5. Executions
 

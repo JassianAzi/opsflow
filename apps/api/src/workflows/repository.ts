@@ -7,7 +7,7 @@ import type {
   WorkflowStepInput,
 } from '@opsflow/shared';
 import type { Database } from '../db/client.js';
-import { workflows, workflowSteps } from '../db/schema.js';
+import { workflowExecutions, workflows, workflowSteps } from '../db/schema.js';
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -245,16 +245,40 @@ export function createWorkflowRepository(db: Database) {
       });
     },
     async remove(organizationId: string, workflowId: string) {
-      const deleted = await db
-        .delete(workflows)
-        .where(
-          and(
-            eq(workflows.id, workflowId),
-            eq(workflows.organizationId, organizationId),
-          ),
-        )
-        .returning({ id: workflows.id });
-      return deleted.length > 0;
+      return db.transaction(async (tx) => {
+        const [workflow] = await tx
+          .select({ id: workflows.id })
+          .from(workflows)
+          .where(
+            and(
+              eq(workflows.id, workflowId),
+              eq(workflows.organizationId, organizationId),
+            ),
+          )
+          .for('update')
+          .limit(1);
+        if (!workflow) return 'not-found' as const;
+        const [execution] = await tx
+          .select({ id: workflowExecutions.id })
+          .from(workflowExecutions)
+          .where(
+            and(
+              eq(workflowExecutions.workflowId, workflowId),
+              eq(workflowExecutions.organizationId, organizationId),
+            ),
+          )
+          .limit(1);
+        if (execution) return 'has-executions' as const;
+        await tx
+          .delete(workflows)
+          .where(
+            and(
+              eq(workflows.id, workflowId),
+              eq(workflows.organizationId, organizationId),
+            ),
+          );
+        return 'deleted' as const;
+      });
     },
   };
 }

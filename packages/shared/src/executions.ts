@@ -31,6 +31,8 @@ export const queueOutboxStatusSchema = z.enum([
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const nonempty = z.string().trim().min(1);
 
+export const idempotencyKeySchema = z.string().trim().min(1).max(200);
+
 export const executionStepSnapshotSchema = z
   .object({
     workflowStepId: z.uuid(),

@@ -67,6 +67,11 @@ it does not run it. HTTP configuration rejects common credential-bearing
 header names, and the UI warns users not to enter credentials. No credential
 vault exists yet, so workflow JSON must not contain secrets.
 
+Phase 3 manual test execution creation rechecks and locks organization
+membership inside the same transaction that locks the tenant-scoped workflow
+and writes its execution, copied steps, and outbox row. It constructs snapshots
+from database rows rather than accepting workflow definitions from clients.
+
 ## 5. Webhook Security
 
 Future production webhook protections should include:

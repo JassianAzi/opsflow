@@ -171,8 +171,15 @@ export function createWorkflowService(
       userId: string,
     ): Promise<void> {
       await authorize(organizationId, userId);
-      if (!(await repository.remove(organizationId, workflowId)))
+      const result = await repository.remove(organizationId, workflowId);
+      if (result === 'not-found')
         throw new ApiError(404, 'WORKFLOW_NOT_FOUND', 'Workflow not found.');
+      if (result === 'has-executions')
+        throw new ApiError(
+          409,
+          'WORKFLOW_HAS_EXECUTIONS',
+          'A workflow with retained execution history cannot be deleted.',
+        );
     },
   };
 }

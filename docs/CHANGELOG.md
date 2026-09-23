@@ -6,6 +6,15 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 3 — Milestone 3 Transactional Manual Execution Creation
+
+- added an authenticated manual test endpoint that returns HTTP 202 with an execution ID
+- locked membership and the tenant-scoped workflow while atomically creating the server-built snapshot, copied steps, and pending outbox row
+- added optional `Idempotency-Key` handling that returns the original execution without duplicate rows
+- changed workflow deletion with retained history to `409 WORKFLOW_HAS_EXECUTIONS`
+- added PostgreSQL integration coverage for authorization, workflow state and trigger rules, tenant isolation, snapshot independence, rollback, idempotency, and deletion conflicts
+- did not add Redis access, outbox dispatch, BullMQ production or consumption, condition evaluation, or action execution
+
 ### Phase 3 — Milestone 2 Execution Contracts and Migration
 
 - added shared Zod contracts for execution and step statuses, immutable workflow and step snapshots, persisted execution steps, and the minimal `{ executionId }` queue job

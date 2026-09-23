@@ -12,6 +12,9 @@ import { ApiError, installErrorHandler } from './errors.js';
 import { createWorkflowRepository } from './workflows/repository.js';
 import { createWorkflowService } from './workflows/service.js';
 import { registerWorkflowRoutes } from './workflows/routes.js';
+import { createExecutionRepository } from './executions/repository.js';
+import { createExecutionService } from './executions/service.js';
+import { registerExecutionRoutes } from './executions/routes.js';
 
 export interface AppOptions {
   database: Database;
@@ -59,6 +62,10 @@ export function buildApp(options: AppOptions) {
     organizations,
   );
   registerWorkflowRoutes(app, auth, workflows);
+  const executions = createExecutionService(
+    createExecutionRepository(options.database),
+  );
+  registerExecutionRoutes(app, auth, executions);
 
   return app;
 }

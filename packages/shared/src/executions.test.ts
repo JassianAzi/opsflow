@@ -4,6 +4,7 @@ import {
   executionStatusSchema,
   executionStepSnapshotSchema,
   executionStepStatusSchema,
+  idempotencyKeySchema,
   workflowExecutionSnapshotSchema,
 } from './executions.js';
 
@@ -113,5 +114,11 @@ describe('execution contracts', () => {
     expect(executionQueueJobSchema.safeParse({ workflowId }).success).toBe(
       false,
     );
+  });
+
+  it('normalizes and bounds idempotency keys', () => {
+    expect(idempotencyKeySchema.parse('  manual-run-1  ')).toBe('manual-run-1');
+    expect(idempotencyKeySchema.safeParse('').success).toBe(false);
+    expect(idempotencyKeySchema.safeParse('x'.repeat(201)).success).toBe(false);
   });
 });

@@ -9,7 +9,11 @@ workflow steps in `apps/api/drizzle/0001_previous_amazoness.sql`. Phase 3
 Milestone 2 adds execution history and the durable queue outbox in
 `apps/api/drizzle/0003_chilly_texas_twister.sql`. Milestone 4 adds dispatcher
 lease ownership in `apps/api/drizzle/0004_mushy_mandarin.sql`. Tasks, audit,
-and webhook tables below remain design targets.
+and webhook tables below remain design targets. Milestone 5 adds worker claim
+state and execution error classification in
+`apps/api/drizzle/0005_certain_secret_warriors.sql`. Its review remediation
+adds durable queue reconciliation state in
+`apps/api/drizzle/0006_oval_king_cobra.sql`.
 
 The exact ORM syntax may change, but the domain model should remain consistent unless the architecture is intentionally revised and documented.
 
@@ -159,7 +163,16 @@ Fields:
 - queued_at
 - started_at
 - completed_at
+- error_type
 - error_message
+- processing_token
+- processing_lease_expires_at
+- processing_attempt
+- reconciliation_attempt_count
+- reconciliation_available_at
+- reconciliation_locked_at
+- reconciliation_lock_token
+- reconciliation_last_error
 
 Statuses:
 - queued
@@ -181,6 +194,15 @@ Constraints and behavior:
 - indexes support organization history, workflow history, and queued status
   scans
 - started/completed timestamps cannot be reversed
+- a running worker claim uses a UUID processing token, expiration timestamp,
+  and nonnegative BullMQ delivery attempt; checks keep the claim fields
+  consistent
+- durable queue recovery has a nonnegative attempt count, next availability,
+  optional redacted error, and a paired lock timestamp/token for concurrent
+  reconcilers
+- `(status, processing_lease_expires_at)` supports expired-claim recovery
+- completion clears the processing claim; a token match fences late workers
+  from overwriting a newer claim
 
 ### execution_steps
 
@@ -355,6 +377,15 @@ Phase 3 Milestone 2 adds
 0000–0002. It was applied from scratch to a disposable PostgreSQL 16
 `opsflow_test` database before database-backed tests ran; the disposable
 container was then removed.
+
+Phase 3 Milestone 4 adds outbox claim ownership in
+`apps/api/drizzle/0004_mushy_mandarin.sql`. Milestone 5 adds execution error
+types and processing leases in
+`apps/api/drizzle/0005_certain_secret_warriors.sql`. Review remediation adds
+`apps/api/drizzle/0006_oval_king_cobra.sql`, which backfills attempt zero for
+any existing live processing claim before enforcing attempt consistency and
+adds restart-safe queue recovery state. All three are additive migrations;
+migrations 0000 through 0005 remain unchanged.
 
 ## 5. Seed Data
 

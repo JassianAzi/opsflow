@@ -242,7 +242,26 @@ export const workflowExecutions = pgTable(
       .defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    errorType: text('error_type'),
     errorMessage: text('error_message'),
+    processingToken: uuid('processing_token'),
+    processingLeaseExpiresAt: timestamp('processing_lease_expires_at', {
+      withTimezone: true,
+    }),
+    processingAttempt: integer('processing_attempt'),
+    reconciliationAttemptCount: integer('reconciliation_attempt_count')
+      .notNull()
+      .default(0),
+    reconciliationAvailableAt: timestamp('reconciliation_available_at', {
+      withTimezone: true,
+    })
+      .notNull()
+      .defaultNow(),
+    reconciliationLockedAt: timestamp('reconciliation_locked_at', {
+      withTimezone: true,
+    }),
+    reconciliationLockToken: uuid('reconciliation_lock_token'),
+    reconciliationLastError: text('reconciliation_last_error'),
   },
   (table) => [
     check(
@@ -260,6 +279,26 @@ export const workflowExecutions = pgTable(
     check(
       'workflow_executions_timestamps_ordered',
       sql`${table.startedAt} IS NULL OR ${table.completedAt} IS NULL OR ${table.startedAt} <= ${table.completedAt}`,
+    ),
+    check(
+      'workflow_executions_processing_lease_consistent',
+      sql`(${table.processingToken} IS NULL) = (${table.processingLeaseExpiresAt} IS NULL)`,
+    ),
+    check(
+      'workflow_executions_processing_attempt_consistent',
+      sql`(${table.processingToken} IS NULL) = (${table.processingAttempt} IS NULL)`,
+    ),
+    check(
+      'workflow_executions_processing_attempt_nonnegative',
+      sql`${table.processingAttempt} IS NULL OR ${table.processingAttempt} >= 0`,
+    ),
+    check(
+      'workflow_executions_reconciliation_attempt_nonnegative',
+      sql`${table.reconciliationAttemptCount} >= 0`,
+    ),
+    check(
+      'workflow_executions_reconciliation_lock_consistent',
+      sql`(${table.reconciliationLockedAt} IS NULL) = (${table.reconciliationLockToken} IS NULL)`,
     ),
     foreignKey({
       name: 'workflow_executions_workflow_org_fk',
@@ -280,6 +319,14 @@ export const workflowExecutions = pgTable(
     index('workflow_executions_status_queued_idx').on(
       table.status,
       table.queuedAt,
+    ),
+    index('workflow_executions_status_lease_idx').on(
+      table.status,
+      table.processingLeaseExpiresAt,
+    ),
+    index('workflow_executions_reconciliation_due_idx').on(
+      table.status,
+      table.reconciliationAvailableAt,
     ),
   ],
 );

@@ -6,6 +6,64 @@ This project uses milestone-oriented development rather than strict semantic ver
 
 ## Unreleased
 
+### Phase 3 — Milestone 5 Worker Consumption and Execution Lifecycle
+
+- added a BullMQ consumer that accepts only the strict `{ executionId }` job,
+  verifies its deterministic job ID, and loads the persisted immutable
+  execution snapshot and copied steps without reading mutable workflow rows
+- added atomic execution claims with UUID token fencing and expiring leases;
+  duplicate deliveries of terminal executions are harmless
+- added an expired-claim recovery monitor so a worker termination cannot leave
+  an execution running indefinitely
+- records the Phase 3 deferred-engine result explicitly: copied steps become
+  `skipped` with a reason and the execution becomes `failed` with
+  `EXECUTION_ENGINE_NOT_IMPLEMENTED`; no condition or action is evaluated
+- records invalid snapshots, unexpected processing errors, and worker
+  termination under distinct durable error types; database write failures fail
+  and retry the BullMQ job instead of reporting false completion
+- added migration `0005_certain_secret_warriors.sql` for execution error type,
+  processing token, lease expiration, consistency constraint, and recovery
+  index without modifying migrations 0000 through 0004
+- added PostgreSQL and Redis integration coverage for transport-only
+  processing, duplicates, immutable snapshot use after workflow edits,
+  crash/restart recovery, tenant identity validation, redacted unexpected
+  errors, and database retry recovery
+- configured dispatched BullMQ jobs with bounded retry and exponential backoff
+- added durable reconciliation for published executions left queued after a
+  BullMQ retry cycle exhausts during a PostgreSQL outage; retained failed jobs
+  are retried with the same deterministic ID after connectivity returns
+- made reconciliation restart-safe and safe across multiple workers by using
+  durable PostgreSQL eligibility plus BullMQ's atomic finished-job retry
+- separated processing failures from outcome persistence failures so a
+  transient database write error is retried without changing the intended
+  domain result to `EXECUTION_PROCESSING_ERROR`
+- moved all processing-lease eligibility and remaining-time calculations to
+  PostgreSQL's clock while preserving UUID token fencing
+- added focused coverage for retry exhaustion and recovery, concurrent
+  reconcilers, one-time persistence failure, stale claim owners,
+  recovery/reclaim races, production retry options, and the complete manual
+  API-to-outbox-to-consumer path
+- updated the disposable infrastructure gate for the combined dispatcher and
+  consumer readiness message; the gate passes including graceful SIGTERM
+- added migration `0006_oval_king_cobra.sql` with durable reconciliation
+  attempt, availability, error, and fenced claim fields plus the persisted
+  BullMQ delivery attempt used by processing ownership
+- made invalid retained job names, payloads, or IDs atomically fail a still
+  queued execution with `EXECUTION_QUEUE_PAYLOAD_INVALID`; copied steps are
+  skipped and active or terminal executions remain fenced from the update
+- bounded reconciliation to five durable cycles across restarts and concurrent
+  workers, with exponential backoff capped at five minutes and terminal
+  `EXECUTION_QUEUE_RECOVERY_EXHAUSTED` handling
+- allowed a later BullMQ delivery attempt to replace an earlier live processing
+  claim after a transient outcome-write failure, while retaining UUID token
+  fencing; expired claims now receive a 15-second retry grace period and the
+  neutral `EXECUTION_PROCESSING_LEASE_EXPIRED` outcome
+- added integration coverage for corrupt job identity variants, more than one
+  reconciliation batch of corrupt jobs, durable retry exhaustion across
+  restarts and concurrent workers, active-claim fencing, and the production
+  consumer/recovery race after a one-time outcome persistence failure
+- did not evaluate conditions or execute log, task, email, HTTP, or AI actions
+
 ### Phase 3 — Milestone 4 Durable Outbox Dispatch
 
 - added a worker-side PostgreSQL outbox dispatcher with safe concurrent claims, UUID lease ownership, stale-lease recovery, and bounded retry/backoff
@@ -15,6 +73,8 @@ This project uses milestone-oriented development rather than strict semantic ver
 - added disposable PostgreSQL and Redis integration coverage for one dispatch, crash-gap duplicate submission, concurrent dispatchers, outage recovery, bounded failure, and clean dispatcher shutdown
 - made worker readiness verify the migrated outbox relation and updated the disposable infrastructure gate to migrate before testing Linux startup and SIGTERM shutdown
 - added Redis to CI services; hosted GitHub Actions remains unverified
+- replaced the deprecated `docker stop --time` gate flag with `--timeout`
+- independently reviewed and committed as `b7250a6`
 - did not add a BullMQ consumer, execution or step status changes, condition evaluation, or actions
 
 ### Phase 3 — Milestone 3 Transactional Manual Execution Creation

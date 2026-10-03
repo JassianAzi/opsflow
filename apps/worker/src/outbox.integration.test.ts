@@ -69,6 +69,12 @@ integrationDescribe('outbox dispatcher integration', () => {
     const job = await cleanupQueue.getJob(fixture.executionId);
     expect(job?.name).toBe('execute-workflow');
     expect(job?.data).toEqual({ executionId: fixture.executionId });
+    expect(job?.opts).toMatchObject({
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 1_000 },
+      removeOnComplete: false,
+      removeOnFail: false,
+    });
     await publisher.close();
   });
 

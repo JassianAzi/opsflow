@@ -41,8 +41,14 @@ Application processes:
 
 The worker verifies PostgreSQL on startup and runs the durable outbox
 dispatcher. Redis may be temporarily unavailable: publication failures remain
-pending with bounded backoff. The worker does not consume jobs yet. PostgreSQL
-and Redis must be running for the complete local flow. Docker
+pending with bounded backoff. It also consumes validated BullMQ execution jobs,
+checks immutable snapshots and copied steps, and records the explicit Phase 3
+deferred-engine failure. It does not evaluate conditions or execute actions.
+The worker also reconciles retained failed jobs for executions that remain
+queued after their outbox row was published, allowing a PostgreSQL outage that
+outlasts one bounded BullMQ retry cycle to recover after the database returns.
+Recovery uses at most five durable cycles with capped backoff.
+PostgreSQL and Redis must be running for the complete local flow. Docker
 PostgreSQL uses host port 5433 by default, with internal port 5432. The host
 ports can be changed through `POSTGRES_PORT` and `REDIS_PORT`; update
 `DATABASE_URL` and `REDIS_URL` to match. An existing `.env` from Phase 0 may
@@ -130,9 +136,9 @@ run `npm run db:migrate`. Start the API and web separately with
 remains running through a Redis outage so pending outbox work can recover when
 Redis returns.
 
-Dispatcher integration tests require both `TEST_DATABASE_URL` and
+Dispatcher and consumer integration tests require both `TEST_DATABASE_URL` and
 `TEST_REDIS_URL`. The database URL is still guarded to the exact database name
-`opsflow_test`. Tests use a unique BullMQ queue and remove its keys afterward:
+`opsflow_test`. Tests use unique BullMQ queues and remove their keys afterward:
 
 ```powershell
 $env:TEST_DATABASE_URL='postgresql://opsflow_test:test_only@127.0.0.1:5433/opsflow_test'
@@ -149,6 +155,32 @@ FROM execution_queue_outbox
 WHERE status IN ('pending', 'failed')
 ORDER BY available_at;
 ```
+
+Execution processing state can be inspected without selecting snapshot or
+configuration JSON:
+
+```sql
+SELECT status, error_type, count(*)
+FROM workflow_executions
+GROUP BY status, error_type;
+
+SELECT id, status, started_at, completed_at, error_type,
+       reconciliation_attempt_count, reconciliation_available_at,
+       reconciliation_last_error
+FROM workflow_executions
+WHERE status IN ('queued', 'running', 'failed')
+ORDER BY queued_at;
+```
+
+`EXECUTION_ENGINE_NOT_IMPLEMENTED` is the expected Phase 3 result for a
+successfully transported manual test job. `EXECUTION_PROCESSING_LEASE_EXPIRED`
+means both the processing lease and the 15-second retry grace period expired.
+`EXECUTION_QUEUE_PAYLOAD_INVALID` identifies a corrupt retained job, and
+`EXECUTION_QUEUE_RECOVERY_EXHAUSTED` identifies five failed durable recovery
+cycles. Before a later engine performs long-running work, it must renew the
+processing lease. BullMQ jobs keep five attempts per cycle; the reconciliation
+loop starts a new cycle only for a queued execution with an already-published
+outbox row and persists its own bounded attempt count in PostgreSQL.
 
 npm workspaces was chosen because it ships with npm and needs no additional
 workspace manager. `packages/shared` and `packages/config` compile before the

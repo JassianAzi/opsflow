@@ -10,8 +10,10 @@ routes. Phase 3 Milestone 1 verified local PostgreSQL, Redis, and worker
 readiness. Milestone 2 adds immutable execution snapshots, execution step
 state, and a durable queue outbox in PostgreSQL. Milestone 3 adds transactional
 manual test execution creation. Milestone 4 adds the worker-side durable
-outbox dispatcher and BullMQ producer. No BullMQ consumer, execution state
-processor, or workflow step execution is implemented yet.
+outbox dispatcher and BullMQ producer. Milestone 5 adds validated BullMQ
+consumption, fenced execution claims, durable status transitions, and expired
+claim recovery. The workflow engine still does not evaluate conditions or run
+actions.
 
 ```text
 Browser
@@ -142,6 +144,46 @@ that gap leaves a reclaimable lease; resubmission uses the same job ID and is
 deduplicated by BullMQ. Redis failures release the lease and schedule bounded
 exponential backoff. The worker does not consume the queued job in Milestone 4.
 
+The Milestone 5 consumer accepts only the shared `{ executionId }` contract and
+matching deterministic job ID. It claims the persisted execution with a UUID
+processing token, lease, and BullMQ delivery attempt, validates the immutable snapshot against the
+copied execution steps, and never reads the mutable workflow definition. A
+duplicate delivery of a terminal execution is a no-op. Because the execution
+engine is deferred, a valid delivery atomically marks every copied step
+`skipped` and the execution `failed` with
+`EXECUTION_ENGINE_NOT_IMPLEMENTED`, then allows the BullMQ job to complete.
+Unexpected processing errors receive a separate durable error type. If that
+database write fails, the BullMQ job fails and retries instead of hiding the
+missing outcome. A later BullMQ delivery attempt may replace the failed
+write's still-live database claim immediately; token fencing prevents the
+earlier owner from writing afterward.
+
+A worker recovery monitor claims expired execution leases with `FOR UPDATE
+SKIP LOCKED` after a 15-second retry grace period and records the neutral
+`EXECUTION_PROCESSING_LEASE_EXPIRED` outcome. The grace period lets a live
+BullMQ retry replace the earlier claim. After both the lease and grace period
+expire, PostgreSQL cannot distinguish a process crash from a database outage
+that prevented every retry from recording ownership, so the terminal reason
+states only the fact that can be proven. The current consumer performs only
+fast validation and finalization. A future action engine must renew the
+processing lease while long-running work is active.
+
+A separate reconciliation loop prevents bounded BullMQ attempts from leaving
+a valid execution permanently queued after a PostgreSQL outage. It reads
+durable executions whose outbox row is already published and whose domain
+status is still queued, then inspects the retained deterministic BullMQ job.
+A failed job is retried with reset BullMQ counters after PostgreSQL is
+available; a missing job is recreated with the same execution ID. PostgreSQL
+stores a separate durable recovery count, next availability, and fenced claim
+lease. At most five recovery cycles are allowed across worker restarts, with
+backoff starting at 30 seconds and capped at five minutes. Exhaustion records
+`EXECUTION_QUEUE_RECOVERY_EXHAUSTED`. Invalid retained identity data records
+`EXECUTION_QUEUE_PAYLOAD_INVALID`; both outcomes atomically skip copied steps
+and leave the queued candidate set. Waiting, delayed, or active jobs are left
+alone without consuming a recovery attempt. BullMQ's atomic retry,
+deterministic ID, and the PostgreSQL claim token make concurrent reconcilers
+safe.
+
 ## 4. Workflow Model
 
 A workflow consists of:
@@ -182,7 +224,7 @@ The data model should still allow future branching by keeping steps explicit and
 2. The API validates the event.
 3. An execution row is created.
 4. A background job is added to Redis/BullMQ.
-5. The worker loads the workflow definition.
+5. The worker loads the immutable execution snapshot and copied steps.
 6. The worker evaluates conditions.
 7. Eligible actions run sequentially.
 8. Each step persists status and result data.
@@ -192,8 +234,9 @@ The data model should still allow future branching by keeping steps explicit and
 Milestone 2 implements the storage contracts for steps 3 and 8 and the outbox
 needed between steps 3 and 4. Milestone 3 implements atomic execution, copied
 step, and outbox creation for manual tests. Milestone 4 dispatches committed
-outbox rows for step 4. Job consumption and status transitions remain separate
-milestones.
+outbox rows for step 4. Milestone 5 implements consumption and the
+deferred-engine failure transition; condition evaluation and action execution
+remain future work.
 
 ## 6. Reliability Rules
 
@@ -215,7 +258,16 @@ Execution creation and its queue outbox insert share one PostgreSQL
 transaction. The dispatcher retries unpublished outbox rows with a finite
 attempt count, a stale-lease timeout, and bounded backoff. The outbox enforces
 one payload per execution and the payload contains only the execution ID.
-BullMQ job consumption and workflow processing remain future work.
+BullMQ consumption uses a fenced database lease. Expired claims are finalized
+as worker-termination failures, and a BullMQ retry observes that terminal
+result as a harmless duplicate. Workflow condition and action processing
+remain future work.
+
+BullMQ retry attempts are bounded per delivery cycle. The durable queue
+reconciler starts a new cycle only while PostgreSQL still reports a queued
+execution with an already-published outbox row. Its separate durable attempt
+count bounds recovery across restarts without creating a different job
+identity.
 
 ### Observability
 At minimum, record:

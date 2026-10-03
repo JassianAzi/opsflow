@@ -239,8 +239,11 @@ The internal workflow execution queue payload is strictly
 step configuration remain in PostgreSQL snapshots and are not copied into the
 queue job. The manual test route stores this payload in the PostgreSQL outbox;
 the worker dispatcher validates and publishes it with the execution UUID as
-the BullMQ job ID. No API route dispatches directly, and no consumer is
-implemented yet.
+the BullMQ job ID. No API route dispatches directly. The worker consumes only
+this validated internal payload and loads the immutable execution snapshot
+from PostgreSQL. During Phase 3 the consumer records
+`EXECUTION_ENGINE_NOT_IMPLEMENTED`, skips copied steps, and fails the domain
+execution without running actions. There is still no execution-read API.
 
 ## 5. Executions
 

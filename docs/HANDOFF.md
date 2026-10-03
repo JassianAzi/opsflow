@@ -6,12 +6,278 @@ Every AI agent must update this file before ending a work session.
 
 ---
 
-## Current State — Phase 3 Milestone 4 Durable Outbox Dispatch
+## Current State — Phase 3 Milestone 5 Worker Consumption and Execution Lifecycle
 
 ### Milestone and Status
 
-Phase 3 Milestone 4 is **implemented and intentionally uncommitted for
-review**. The worker now claims committed PostgreSQL outbox rows and publishes
+Phase 3 Milestone 5 is **implemented and intentionally uncommitted for
+independent review**. The worker consumes validated BullMQ execution jobs,
+loads the immutable persisted execution state, claims it with a fenced lease,
+and records a durable terminal result. The Phase 3 execution engine remains
+deferred: every copied step is explicitly skipped and the domain execution is
+failed with `EXECUTION_ENGINE_NOT_IMPLEMENTED`. No condition or action ran.
+
+Milestone 4 passed independent review and was committed separately as
+`b7250a6c4a5e3ca6cc7d89150e2326044294d4a0 feat: dispatch execution outbox
+jobs`. That commit includes the requested maintenance change from deprecated
+`docker stop --time` to `docker stop --timeout` in the infrastructure gate.
+
+### Consumer and Lifecycle Design
+
+- `BullExecutionConsumer` accepts only the shared strict `{ executionId }`
+  schema, the `execute-workflow` name, and a BullMQ job ID equal to the
+  execution UUID. Invalid internal jobs fail unrecoverably in BullMQ and the
+  reconciliation path records a fenced durable terminal outcome in PostgreSQL.
+- `PostgresExecutionRepository.claim` locks the execution row and transitions a
+  queued or expired-running execution to `running` in one transaction. It
+  records a random UUID `processing_token`, an expiration timestamp, BullMQ
+  delivery attempt, and the first start time, then reads ordered copied
+  `execution_steps` in the same transaction. Lease eligibility and remaining
+  duration are calculated with PostgreSQL `clock_timestamp()` rather than the
+  worker host clock. A later delivery attempt may replace an earlier live
+  claim after an outcome persistence failure; equal or older deliveries wait.
+- The consumer never queries `workflows` or `workflow_steps`. It validates the
+  stored snapshot and verifies its workflow, organization, version, trigger,
+  and ordered steps against the immutable execution row and copied step rows.
+- A valid delivery atomically changes all copied steps to `skipped` with the
+  deferred-engine reason and changes the execution to `failed` with
+  `EXECUTION_ENGINE_NOT_IMPLEMENTED`. The processing token and lease are
+  cleared. Only then may the BullMQ handler resolve.
+- Completed, failed, or cancelled executions make duplicate deliveries a
+  no-op. A finishing worker must still own the processing token. A worker that
+  lost its claim throws rather than letting its queue delivery report success
+  before a newer owner records a durable outcome.
+- Snapshot mismatches record `EXECUTION_SNAPSHOT_INVALID`. Other processing
+  errors record `EXECUTION_PROCESSING_ERROR` with redacted details. Outcome
+  selection is separate from persistence: any durable outcome write failure
+  propagates to BullMQ and retries without reclassifying the domain result.
+- `ExecutionRecoveryMonitor` polls for expired running claims with `FOR UPDATE
+  SKIP LOCKED` after a 15-second retry grace period and atomically records
+  skipped steps plus `EXECUTION_PROCESSING_LEASE_EXPIRED`. A later stalled-job
+  delivery sees the terminal execution and completes harmlessly.
+- Publisher jobs now have five BullMQ attempts with exponential backoff. The
+  deterministic execution ID remains the job ID, and completed and failed jobs
+  remain retained.
+- `ExecutionQueueReconciler` claims due queued/published executions with a
+  PostgreSQL UUID lock token. Failed retained jobs retry and missing jobs are
+  recreated with the same deterministic ID. A separate durable counter allows
+  five recovery cycles across worker restarts with exponential backoff from 30
+  seconds capped at five minutes. Exhaustion atomically records
+  `EXECUTION_QUEUE_RECOVERY_EXHAUSTED`; invalid name, payload, or ID records
+  `EXECUTION_QUEUE_PAYLOAD_INVALID`. Both skip copied steps and remove the row
+  from the candidate set. Active jobs release the database claim without
+  consuming an attempt. Multiple workers are serialized by PostgreSQL claim
+  fencing and BullMQ's atomic job transition.
+- Startup checks the Milestone 5 execution columns, starts recovery, consumer,
+  queue reconciliation, and dispatcher modules, and reports readiness.
+  SIGINT/SIGTERM stops all four modules and closes Redis and PostgreSQL
+  resources.
+
+### Database and Migration State
+
+- Added `apps/api/drizzle/0005_certain_secret_warriors.sql` and
+  `apps/api/drizzle/meta/0005_snapshot.json`.
+- Migration 0005 adds nullable `workflow_executions.error_type`,
+  `processing_token`, and `processing_lease_expires_at`, a check requiring the
+  two claim fields to be both null or both present, and an index on
+  `(status, processing_lease_expires_at)` for recovery scans.
+- Added `apps/api/drizzle/0006_oval_king_cobra.sql` and
+  `apps/api/drizzle/meta/0006_snapshot.json`. Migration 0006 adds the nullable
+  processing delivery attempt, durable reconciliation attempt count, next
+  availability, lock timestamp/token, redacted last error, consistency checks,
+  and the `(status, reconciliation_available_at)` due-work index. Existing live
+  claims are backfilled with delivery attempt zero before the new consistency
+  check is added.
+- The migration is additive and compatible with existing execution rows: all
+  reconciliation counters begin at zero and timestamps default to migration
+  time. Migrations 0000 through 0005 were verified unchanged.
+
+### Focused Tests
+
+The new PostgreSQL and Redis integration suite verifies observable behavior:
+
+- a normal transport-only delivery records the explicit failed execution,
+  skipped step, reason, timestamps, and a completed BullMQ job
+- removing and redelivering a retained job leaves the terminal database result
+  unchanged
+- editing the current workflow and mutable workflow step after execution
+  creation does not alter the snapshot or copied step consumed by the worker
+- forced worker termination after claim, BullMQ stall recovery, a replacement
+  consumer, and the recovery monitor produce one durable worker-termination
+  result rather than leaving `running`
+- a snapshot with the wrong organization identity fails validation while an
+  unrelated tenant execution and its step remain unchanged
+- an unexpected processor failure persists a redacted processing error and
+  skipped step
+- a test-only database trigger that rejects the first outcome causes BullMQ to
+  retry while the recovery monitor is active; the later delivery replaces the
+  earlier claim and records exactly one durable deferred-engine result without
+  changing it to a processing or lease-expired error
+- a consumer with unavailable PostgreSQL exhausts its job attempts while the
+  execution remains queued; two concurrent reconcilers safely retry the same
+  retained job after connectivity returns and the normal consumer records the
+  expected terminal result
+- an expired claim can be replaced, but its old owner receives `lost-claim`
+  and cannot overwrite the newer result
+- concurrent expired-claim recovery and reclaim serialize to one fenced
+  terminal result
+- invalid retained job names, payloads, and IDs atomically fail only the
+  still-queued execution and skip its copied steps; a concurrent active claim
+  cannot be overwritten
+- 101 older invalid jobs leave the candidate set in bounded batches and do not
+  indefinitely starve newer valid recovery work
+- three failed recovery cycles persist across reconciler instances, use capped
+  backoff, serialize concurrent workers, redact errors, and end with
+  `EXECUTION_QUEUE_RECOVERY_EXHAUSTED`
+- the production dispatcher job contains five attempts, exponential backoff,
+  deterministic retention, and the expected minimal payload
+- one end-to-end integration test creates a manual test through the Fastify
+  API, dispatches its outbox row, consumes the BullMQ job, and verifies the
+  Phase 3 failed execution plus skipped step
+
+### Files Changed in Milestone 5
+
+Added:
+
+- `apps/api/drizzle/0005_certain_secret_warriors.sql`
+- `apps/api/drizzle/meta/0005_snapshot.json`
+- `apps/api/drizzle/0006_oval_king_cobra.sql`
+- `apps/api/drizzle/meta/0006_snapshot.json`
+- `apps/worker/src/execution/consumer.ts`
+- `apps/worker/src/execution/processor.ts`
+- `apps/worker/src/execution/reconciler.ts`
+- `apps/worker/src/execution/recovery.ts`
+- `apps/worker/src/execution/repository.ts`
+- `apps/worker/src/execution-consumer.integration.test.ts`
+
+Modified:
+
+- `apps/api/drizzle/meta/_journal.json`
+- `apps/api/src/db/schema.ts`
+- `apps/worker/src/index.ts`
+- `apps/worker/src/outbox.integration.test.ts`
+- `apps/worker/src/outbox/publisher.ts`
+- `packages/shared/src/executions.ts`
+- `scripts/verify-infrastructure-gate.ps1`
+- `README.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DATABASE.md`
+- `docs/DEVELOPMENT.md`
+- `docs/ROADMAP.md`
+- `docs/CHANGELOG.md`
+- `docs/HANDOFF.md`
+
+### Commands and Results
+
+- Milestone 4 closeout: PowerShell parser validation, `docker stop --help`,
+  `npm run format:check`, `npm run lint`, and `git diff --check` passed before
+  commit `b7250a6c4a5e3ca6cc7d89150e2326044294d4a0`.
+- `npm run db:generate`: passed and generated migration 0005 plus its snapshot.
+- `npm run format`, `npm run format:check`, `npm run lint`, and `npm run
+  typecheck`: passed.
+- Disposable containers `opsflow-m5-pg-3001e36825` and
+  `opsflow-m5-redis-3001e36825` reached healthy on loopback ports 63317 and
+  63318. Tests used only the guarded `opsflow_test` database and a unique
+  disposable BullMQ queue.
+- The original Milestone 5 run passed **59 tests in 9 files**. After independent
+  review remediation, the expanded disposable PostgreSQL and Redis suite
+  passed **63 tests in 9 files**.
+- `npm run build`: passed. Vite reported only its existing nonfatal Zod comment
+  and bundle-size warnings.
+- `DROP DATABASE IF EXISTS opsflow_test WITH (FORCE)` followed by `CREATE
+  DATABASE opsflow_test OWNER opsflow_test`, then two `npm run db:migrate`
+  invocations: fresh migration and idempotent rerun both passed.
+- `npm exec --workspace @opsflow/api drizzle-kit check`: passed with
+  `Everything's fine`.
+- Direct PostgreSQL catalog queries confirmed all three new columns and
+  `workflow_executions_processing_lease_consistent`.
+- `git diff --exit-code HEAD --` for migration SQL files 0000 through 0004:
+  passed unchanged. `git diff --check`: passed with line-ending notices only.
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+  .\\scripts\\verify-infrastructure-gate.ps1`: passed as disposable project
+  `opsflow-m1-34352-8227bdb6` on ports 49350 and 49351. It verified service
+  health, `services:check` before and after restart, migrations 0000 through
+  0005, PostgreSQL and Redis persistence, Linux worker build, combined
+  dispatcher/consumer readiness, graceful SIGTERM exit code 0, and scoped
+  cleanup.
+- Independent review remediation used disposable PostgreSQL 16 container
+  `opsflow-m5-fix-pg-fcbba13dc8` on port 58669 and Redis 7 container
+  `opsflow-m5-fix-redis-fcbba13dc8` on port 58670. Both reached healthy.
+- The first expanded test run exposed only a fixture parameter-cast error; no
+  product behavior failed. After correcting that fixture, `npm test` passed
+  **63 tests in 9 files**, including exhausted-retry reconciliation,
+  concurrent reconcilers, one-time outcome-write recovery, stale-owner
+  fencing, recovery/reclaim concurrency, production job options, and the full
+  API-to-worker path.
+- Final remediation `npm run lint`, `npm run typecheck`, `npm run
+  format:check`, and `npm run build`: passed. Vite emitted only its existing
+  nonfatal Zod comment and bundle-size warnings.
+- The disposable `opsflow_test` database was dropped and recreated, then
+  `npm run db:migrate` applied migrations 0000 through 0005 successfully. A
+  second run was a successful no-op, and `npm exec --workspace @opsflow/api
+  drizzle-kit check` returned `Everything's fine`.
+- Migration SQL and snapshots 0000 through 0004 were verified unchanged;
+  remediation required no additional migration. `git diff --check` passed
+  with line-ending notices only.
+- The updated infrastructure gate passed as disposable project
+  `opsflow-m1-32468-549d38ea` on ports 49912 and 49913. It verified service
+  health, connectivity, migrations, volume-backed restart, persistence,
+  Linux worker build, dispatcher/consumer/reconciliation readiness, graceful
+  SIGTERM exit code 0, and scoped cleanup.
+- Redis reported `DBSIZE 0`; both remediation test containers and PostgreSQL's
+  anonymous disposable volume were removed.
+
+### Known Issues, Limits, and Git State
+
+- The current five-second database processing lease plus 15-second recovery
+  grace is suitable for the fast Phase 3 validation/finalization path. A later
+  BullMQ delivery attempt supersedes the earlier claim during this window. A
+  future action engine must renew the lease while long-running work is active
+  before it executes any action.
+- BullMQ and PostgreSQL cannot share one transaction. Durable execution state,
+  deterministic jobs, token fencing, retries, and expired-claim recovery make
+  the current transport at-least-once safe. Published executions that remain
+  queued after bounded queue attempts are durably reconciled after service
+  recovery.
+- There is no execution list/detail API or dashboard yet. Failed and running
+  state can be inspected directly with the documented SQL.
+- After the lease and grace period expire, PostgreSQL cannot prove whether the
+  former owner crashed or a database outage prevented every live retry from
+  recording ownership. Recovery therefore records the neutral
+  `EXECUTION_PROCESSING_LEASE_EXPIRED` reason rather than asserting that the
+  process terminated. No condition or action has run in Phase 3, so this
+  terminal choice cannot hide a performed side effect.
+- Durable queue recovery permits five cycles. A continuing Redis or processing
+  infrastructure failure then records `EXECUTION_QUEUE_RECOVERY_EXHAUSTED`;
+  operators must create a new manual test execution after correcting the
+  service problem.
+- Hosted GitHub Actions remains unverified; the local equivalent PostgreSQL,
+  Redis, lint, type, test, build, migration, and Linux worker checks passed.
+- The optional Phase 2 concurrent PATCH interleaving and rendered dirty-editor
+  tests remain deferred. Existing older organization routes retain the tracked
+  membership-revocation timing window.
+- Milestone 5 plus its independent-review remediation are the only
+  working-tree changes and must remain uncommitted for another review. No test
+  container, anonymous test volume, or gate project resource remains.
+
+### Recommended Next Action
+
+Independently review the remediated Milestone 5, especially exhausted-job
+reconciliation, claim fencing, PostgreSQL-clock leases, immutable snapshot
+use, and outcome persistence errors. Commit it if the review passes. Phase 3
+transport and lifecycle are then ready; begin Phase 4 only as a separate
+milestone. Add lease renewal before any operation may exceed the current
+processing lease.
+
+---
+
+## Previous State — Phase 3 Milestone 4 Durable Outbox Dispatch
+
+### Milestone and Status
+
+Phase 3 Milestone 4 is **complete and committed as `b7250a6`**. The worker
+claims committed PostgreSQL outbox rows and publishes
 strict `{ executionId }` jobs to BullMQ. It does not consume jobs, change
 execution or step status, evaluate conditions, or perform actions.
 
@@ -174,16 +440,14 @@ Redis URLs, and credentials.
 - The optional Phase 2 concurrent PATCH interleaving and rendered dirty-editor
   tests remain deferred. Existing older routes retain the tracked membership
   revocation timing window.
-- Milestone 4 changes listed above are the only working-tree changes and must
-  remain uncommitted for independent review. `git status --short` lists only
-  those modified and added files; there are no temporary test artifacts.
+- Milestone 4 passed independent review and its listed changes were committed
+  separately as `b7250a6` before Milestone 5 began.
 
 ### Recommended Next Action
 
-Independently review and commit Milestone 4. Then implement a BullMQ consumer
-as the next isolated milestone: claim one execution by ID, enforce idempotent
-execution state transitions, and prove crash/retry behavior before evaluating
-conditions or actions.
+This historical recommendation was completed by Milestone 5: the BullMQ
+consumer now claims one execution by ID, enforces idempotent state transitions,
+and proves crash/retry behavior without evaluating conditions or actions.
 
 ---
 

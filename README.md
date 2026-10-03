@@ -1,52 +1,86 @@
 # OpsFlow
 
-OpsFlow is a local-first workflow automation platform designed as a portfolio-grade full-stack engineering project.
+A workflow-automation backend built as a portfolio engineering project:
+organizations define workflows (trigger, ordered conditions and actions), and
+executions are queued durably and processed by a background worker.
 
-It allows users to define event-driven workflows such as:
+**Status: In Development.** Runs locally with Docker Compose; not deployed.
 
-> When an inbound event occurs, evaluate conditions, execute one or more actions, record the result, and surface the execution history in the dashboard.
+## What works today
 
-The project is intentionally designed to demonstrate production-style engineering concepts without requiring paid hosting during development.
+- **Accounts and organizations:** registration, sign-in/out, multi-tenant
+  organizations with `owner` and `member` roles, enforced on every
+  organization-scoped route.
+- **Workflow management:** create, edit, validate and activate workflows with a
+  trigger and ordered condition/action steps, through the API and a React
+  editor. Saves use optimistic concurrency (`expectedVersion`, `409` on a lost
+  update).
+- **Manual test executions:** one API call atomically stores an immutable
+  execution snapshot, its copied steps, and a queue outbox row, with optional
+  `Idempotency-Key` support.
+- **Queue pipeline:** the worker dispatches committed outbox rows to BullMQ and
+  consumes the jobs, recording a durable terminal result for every execution.
 
-## Goals
+## In development
 
-OpsFlow should demonstrate:
+- **The workflow step engine is not implemented yet.** Every execution
+  currently ends as `failed` with `EXECUTION_ENGINE_NOT_IMPLEMENTED`, and every
+  copied step is recorded as `skipped`; no condition or action runs. The
+  pipeline around it (dispatch, claiming, retries, recovery) is complete so the
+  engine can be added without weakening those guarantees.
 
-- Full-stack TypeScript development
-- Multi-tenant architecture
-- Role-based access control
-- Event-driven workflow execution
-- Background job processing
-- Retry and failure handling
-- Webhooks and third-party integration patterns
-- Audit logging
-- Real-time or near-real-time execution updates
-- API design
-- Database design and migrations
-- Automated testing
-- Docker-based local development
-- Clean documentation and AI-assisted development discipline
+## Planned
 
-## Current Deployment Strategy
+Condition evaluation and core actions, webhook triggers, an HTTP action, an
+optional AI-provider action (with a mock provider for cost-free development),
+an execution dashboard, and audit logs. See `docs/ROADMAP.md`.
 
-For the initial portfolio phase:
+## Architecture
 
-- Frontend runs locally
-- Backend runs locally
-- PostgreSQL runs locally
-- Redis runs locally
-- Background workers run locally
-- Source code is intended for a public GitHub repository
-- No paid deployment is required
+```text
+apps/web      React + Vite (Tailwind)        workflow editor
+apps/api      Fastify + Drizzle ORM          auth, organizations, workflows, executions
+apps/worker   BullMQ + node-postgres         outbox dispatch, consumption, recovery
+packages/shared  Zod contracts shared by every app
+packages/config  validated environment and connection settings
+```
 
-Deployment is postponed. Public GitHub is the initial portfolio showcase.
+PostgreSQL is the source of truth; Redis carries only the BullMQ queue. A job
+contains just `{ executionId }`, and the worker re-reads and validates the
+stored snapshot before doing anything.
+
+## Engineering highlights
+
+- **TypeScript npm-workspaces monorepo** with shared Zod contracts across API,
+  worker and frontend.
+- **Transactional outbox:** the execution, its snapshot and the outbox row
+  commit in one transaction; the dispatcher publishes with deterministic job
+  IDs, bounded retries and exponential backoff.
+- **Immutable execution snapshots:** later workflow edits cannot change an
+  execution already created.
+- **Fenced leases:** workers claim executions with `FOR UPDATE`, a random
+  processing token and a lease timed by PostgreSQL's `clock_timestamp()`; a
+  worker that lost its claim cannot overwrite a newer result.
+- **Concurrent-safe claiming** with `FOR UPDATE SKIP LOCKED` for outbox rows,
+  expired leases and reconciliation work.
+- **Idempotent processing:** duplicate or redelivered jobs are no-ops once an
+  execution is terminal; manual executions accept an idempotency key.
+- **Reconciliation and recovery:** expired claims, stalled jobs and executions
+  left queued after Redis or worker failures are recovered with durable,
+  capped retry counters and explicit terminal reasons.
+- **Security basics:** scrypt password hashing, hashed session tokens in
+  HTTP-only, SameSite cookies, tenant-scoped queries.
+- **Integration tests against real PostgreSQL and Redis**, including forced
+  worker termination, lost claims, concurrent recovery and queue outages.
+- **GitHub Actions CI** provisions PostgreSQL 16 and Redis 7 service containers
+  and runs lint, typecheck, tests and build.
 
 ## Run locally
 
-Requirements: Node.js 22.12 or newer, npm 10, and Docker Compose.
+Requirements: Node.js 22.12+, npm 10 and Docker Compose.
 
 ```bash
-cp .env.example .env
+cp .env.example .env        # local-only sample values
 docker compose up -d
 npm ci
 npm run db:migrate
@@ -54,112 +88,26 @@ npm run services:check
 npm run dev
 ```
 
-The web app is at `http://127.0.0.1:5173`, and the API health check is at
-`http://127.0.0.1:4000/health`. Register, sign in, create an organization, and
-configure workflows in the web app. Activation stores a status change but does
-not run the workflow. The API can create a durable manual test execution and
-outbox record. The worker dispatches committed outbox rows to BullMQ, but no
-consumer processes those jobs yet. PostgreSQL uses host port 5433 by default to avoid a local 5432
-conflict, while its container still uses 5432. The sample password in
-`.env.example` is for local development only. Change `POSTGRES_PASSWORD` and
-the password in `DATABASE_URL` together if you change it.
+Web: `http://127.0.0.1:5173`. API health: `http://127.0.0.1:4000/health`.
+PostgreSQL uses host port 5433 by default.
 
-Useful root commands: `npm run lint`, `npm run typecheck`, `npm test`,
-`npm run build`, and `npm run format:check`. See `docs/DEVELOPMENT.md` for details.
+## Quality checks
 
-## Stack
-
-### Frontend
-- React
-- TypeScript
-- Vite
-- Tailwind CSS
-- shadcn/ui, TanStack Query, and React Router remain planned for later phases
-
-### Backend
-- Node.js
-- TypeScript
-- Fastify
-- Zod
-- PostgreSQL
-- Drizzle ORM
-
-### Infrastructure
-- Redis
-- BullMQ
-- Docker
-- Docker Compose
-- GitHub Actions
-
-### Optional AI
-- Anthropic or OpenAI API
-- Mock AI provider for cost-free development
-- Local model support may be added later
-
-## Repository Structure
-
-```text
-opsflow/
-├── apps/
-│   ├── web/
-│   ├── api/
-│   └── worker/
-├── packages/
-│   ├── shared/
-│   └── config/
-├── docs/
-│   ├── REQUIREMENTS.md
-│   ├── ARCHITECTURE.md
-│   ├── DATABASE.md
-│   ├── API.md
-│   ├── SECURITY.md
-│   ├── DEVELOPMENT.md
-│   ├── ROADMAP.md
-│   ├── AI_INSTRUCTIONS.md
-│   ├── HANDOFF.md
-│   └── CHANGELOG.md
-├── docker-compose.yml
-├── .env.example
-└── README.md
+```bash
+npm run lint
+npm run typecheck
+npm test            # integration suites need TEST_DATABASE_URL and TEST_REDIS_URL
+npm run build
 ```
 
-## Development Philosophy
+Integration tests run only against a dedicated database named `opsflow_test`.
+See `docs/DEVELOPMENT.md` for the exact setup, and
+`scripts/verify-infrastructure-gate.ps1` for the Docker infrastructure check
+(PostgreSQL/Redis health, migrations, persistence, Linux worker readiness and
+graceful shutdown).
 
-OpsFlow is not intended to be a giant feature-heavy SaaS.
+## Documentation
 
-The priority is to build a smaller set of workflows with strong engineering quality:
-
-- predictable architecture
-- clear boundaries
-- robust error handling
-- clean code
-- tests
-- documentation
-- reproducible local setup
-
-## Core Demo Flow
-
-The first portfolio-ready workflow should demonstrate:
-
-1. A user creates an organization.
-2. The user creates a workflow.
-3. The workflow defines a trigger.
-4. The workflow defines one or more conditions.
-5. The workflow defines one or more actions.
-6. A test event is submitted.
-7. The event is queued.
-8. A worker processes the workflow.
-9. Each step records its result.
-10. The UI shows the final execution status and logs.
-
-## Status
-
-Phase 2 workflow CRUD is implemented, including triggers, ordered conditions
-and actions, activation validation, and a workflow editor. Phase 3 now has a
-verified local PostgreSQL/Redis/worker infrastructure gate plus immutable
-execution snapshot, execution step, and durable queue outbox storage contracts.
-An authenticated manual test endpoint creates all three atomically, and the
-worker durably dispatches pending outbox rows to BullMQ. No job consumer or
-workflow step execution is implemented yet.
-
-See `docs/ROADMAP.md` for implementation milestones.
+`docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/API.md`,
+`docs/SECURITY.md`, `docs/DEVELOPMENT.md`, `docs/REQUIREMENTS.md`,
+`docs/ROADMAP.md` and `docs/CHANGELOG.md`.

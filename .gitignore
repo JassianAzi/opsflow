@@ -14,3 +14,14 @@ Thumbs.db
 *.swp
 *.swo
 .local/
+
+# Local secrets/keys
+*.pem
+*.key
+
+# AI-assistant session files (kept locally, not published)
+prompts/
+docs/AI_INSTRUCTIONS.md
+.claude/
+CLAUDE.md
+AGENTS.md

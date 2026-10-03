@@ -211,7 +211,7 @@ function Wait-ForWorkerReadiness {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   while ([DateTime]::UtcNow -lt $deadline) {
     $logs = Invoke-NativeCommand -Description 'Worker log inspection' -FilePath 'docker' -ArgumentList @('logs', $workerContainer) -CaptureOutput
-    if ($logs -match 'OpsFlow worker ready; outbox dispatcher started\.') {
+    if ($logs -match 'OpsFlow worker ready; dispatcher, consumer, and reconciliation started\.') {
       Write-Host 'Worker readiness log observed.'
       return
     }
